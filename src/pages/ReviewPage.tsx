@@ -161,15 +161,38 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
     void submit(nextReview)
   }
 
+  const resetReviewForm = (qaType: QaType) => {
+    setReview(createReviewDraft(settings, user.displayName, qaType))
+    setValidation({ errors: [], fieldErrors: {} })
+    setShowChecklist(false)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
   const submit = async (value = review) => {
     try {
       await onSave(value)
-      setReview(createReviewDraft(settings, user.displayName, value.qaType))
-      setValidation({ errors: [], fieldErrors: {} })
+      resetReviewForm(value.qaType)
+    } catch (error) {
       setShowChecklist(false)
-      window.scrollTo({ top: 0, behavior: 'smooth' })
-    } catch {
-      setShowChecklist(false)
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'The server did not confirm the save.'
+
+      const mayHaveSaved =
+        message.includes('502') ||
+        message.includes('504') ||
+        message.toLowerCase().includes('unreadable response')
+
+      if (
+        mayHaveSaved &&
+        window.confirm(
+          'The server did not confirm the response, but the review may already be saved in Agents Reviewed. Clear the form now?',
+        )
+      ) {
+        resetReviewForm(value.qaType)
+      }
     }
   }
 
