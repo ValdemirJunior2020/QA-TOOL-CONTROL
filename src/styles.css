@@ -371,3 +371,18 @@ h1 { letter-spacing: -0.035em; }
   .segmented-control { width: 100%; }
   .segmented-control button { flex: 1; }
 }
+.sidebar-tool-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 13px 14px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 900;
+  text-decoration: none;
+}
