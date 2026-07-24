@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
 import type { AppSettings, CriterionDefinition, QaType, QaUser, UserRole } from '../types'
 
+const SUPER_ADMIN_EMAIL = 'infojr.83@gmail.com'
+const RETIRED_USER_EMAILS = new Set(['barbara.kalchik8reserve@gmail.com'])
+
 interface AdminPageProps {
   currentUser: QaUser
   users: QaUser[]
@@ -45,7 +48,28 @@ export function AdminPage({
   const [draftSettings, setDraftSettings] = useState<AppSettings>(() => structuredClone(settings))
   const [newCenter, setNewCenter] = useState('')
 
-  const admins = useMemo(() => users.filter((user) => user.role === 'admin'), [users])
+  const visibleUsers = useMemo(() => {
+    const seen = new Set<string>()
+
+    return users.filter((user) => {
+      const email = user.email.trim().toLowerCase()
+
+      if (!email || RETIRED_USER_EMAILS.has(email) || seen.has(email)) {
+        return false
+      }
+
+      seen.add(email)
+      return true
+    })
+  }, [users])
+
+  const admins = useMemo(
+    () => visibleUsers.filter((user) => user.role === 'admin'),
+    [visibleUsers],
+  )
+
+  const currentUserEmail = currentUser.email.trim().toLowerCase()
+  const isSuperAdmin = currentUserEmail === SUPER_ADMIN_EMAIL
 
   const saveUser = async () => {
     if (!editingUser) return
@@ -127,8 +151,17 @@ export function AdminPage({
           </div>
 
           <div className="team-grid">
-            {users.map((user) => {
-              const protectedAdmin = user.role === 'admin'
+            {visibleUsers.map((user) => {
+              const userEmail = user.email.trim().toLowerCase()
+              const isTargetSuperAdmin = userEmail === SUPER_ADMIN_EMAIL
+              const isCurrentUser = userEmail === currentUserEmail
+              const canManageTarget =
+                isSuperAdmin
+                  ? !isTargetSuperAdmin || isCurrentUser
+                  : user.role !== 'admin' || isCurrentUser
+              const canBlockTarget =
+                !isTargetSuperAdmin && (user.role !== 'admin' || isSuperAdmin)
+
               return (
                 <article key={user.email} className={`team-card ${!user.active ? 'disabled' : ''}`}>
                   <div className="team-card-heading">
@@ -149,8 +182,16 @@ export function AdminPage({
                   {user.notes && <p className="team-note">{user.notes}</p>}
 
                   <div className="team-actions">
-                    <button type="button" className="secondary-button compact" onClick={() => setEditingUser(structuredClone(user))}>Edit</button>
-                    {!protectedAdmin && (
+                    <button
+                      type="button"
+                      className="secondary-button compact"
+                      onClick={() => setEditingUser(structuredClone(user))}
+                      disabled={!canManageTarget}
+                      title={!canManageTarget ? 'Only Junior can edit another administrator.' : undefined}
+                    >
+                      Edit
+                    </button>
+                    {canBlockTarget && (
                       <button
                         type="button"
                         className={user.active ? 'danger-button compact' : 'success-button compact'}
@@ -305,7 +346,7 @@ export function AdminPage({
         <div className="modal-backdrop" role="presentation">
           <section className="modal-card user-modal" role="dialog" aria-modal="true" aria-labelledby="user-modal-title">
             <p className="eyebrow">Access control</p>
-            <h2 id="user-modal-title">{users.some((user) => user.email === editingUser.email) ? 'Edit Person' : 'Add Person'}</h2>
+            <h2 id="user-modal-title">{visibleUsers.some((user) => user.email === editingUser.email) ? 'Edit Person' : 'Add Person'}</h2>
 
             <div className="modal-form-grid">
               <label className="field">
@@ -318,21 +359,33 @@ export function AdminPage({
                   type="email"
                   value={editingUser.email}
                   onChange={(event) => setEditingUser({ ...editingUser, email: event.target.value })}
-                  disabled={users.some((user) => user.email === editingUser.email)}
+                  disabled={visibleUsers.some((user) => user.email === editingUser.email)}
                 />
               </label>
               <label className="field">
                 <span>Role</span>
                 <select
                   value={editingUser.role}
-                  onChange={(event) => setEditingUser({ ...editingUser, role: event.target.value as UserRole })}
-                  disabled={editingUser.role === 'admin'}
+                  onChange={(event) =>
+                    setEditingUser({
+                      ...editingUser,
+                      role: event.target.value as UserRole,
+                    })
+                  }
+                  disabled={
+                    editingUser.email.trim().toLowerCase() === SUPER_ADMIN_EMAIL ||
+                    (!isSuperAdmin && editingUser.role === 'admin')
+                  }
                 >
                   <option value="evaluator">Evaluator</option>
                   <option value="viewer">Viewer</option>
-                  {editingUser.role === 'admin' && <option value="admin">Admin</option>}
+                  {(isSuperAdmin || editingUser.role === 'admin') && (
+                    <option value="admin">Admin</option>
+                  )}
                 </select>
-                <em>Only Junior and Barbara can be administrators.</em>
+                <em>
+                  Junior is the Super Admin and can change Barbara’s role and access.
+                </em>
               </label>
               <label className="field wide-field">
                 <span>Admin note</span>
@@ -342,11 +395,20 @@ export function AdminPage({
 
             <div className="permission-editor">
               <label className="toggle-row">
-                <input type="checkbox" checked={editingUser.active} onChange={(event) => setEditingUser({ ...editingUser, active: event.target.checked })} disabled={editingUser.role === 'admin'} />
+                <input type="checkbox" checked={editingUser.active} onChange={(event) => setEditingUser({ ...editingUser, active: event.target.checked })} disabled={
+                    editingUser.email.trim().toLowerCase() === SUPER_ADMIN_EMAIL ||
+                    (!isSuperAdmin && editingUser.role === 'admin')
+                  }
+                />
                 <span><strong>Account active</strong><small>Blocked people can’t enter the app.</small></span>
               </label>
               <label className="toggle-row guided-toggle">
-                <input type="checkbox" checked={editingUser.guidedMode} onChange={(event) => setEditingUser({ ...editingUser, guidedMode: event.target.checked })} disabled={editingUser.role === 'admin'} />
+                <input type="checkbox" checked={editingUser.guidedMode} onChange={(event) => setEditingUser({ ...editingUser, guidedMode: event.target.checked })} disabled={
+                    editingUser.role === 'admin' ||
+                    (!isSuperAdmin &&
+                      editingUser.email.trim().toLowerCase() !== currentUserEmail)
+                  }
+                />
                 <span><strong>Guided Mode</strong><small>Adds friendly reminders, locked scoring fields, and a final checklist.</small></span>
               </label>
               <label className="toggle-row">
@@ -397,6 +459,14 @@ export function AdminPage({
                 Kelly’s default setup uses Guided Mode. The app gives clear reminders without using negative or embarrassing language.
               </div>
             )}
+
+            {isSuperAdmin &&
+              editingUser.email.trim().toLowerCase() !== SUPER_ADMIN_EMAIL && (
+                <div className="kind-note">
+                  Super Admin control is active. Junior can change this person’s role,
+                  permissions, Guided Mode, and active status, including for administrators.
+                </div>
+              )}
 
             <div className="modal-actions">
               <button type="button" className="secondary-button" onClick={() => setEditingUser(null)}>Cancel</button>

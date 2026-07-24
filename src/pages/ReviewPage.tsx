@@ -272,7 +272,7 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
               <input
                 value={review.agentName}
                 onChange={(event) => updateField('agentName', event.target.value)}
-                placeholder="Enter the reviewed agent"
+                placeholder=""
                 disabled={!user.permissions.canEditAgentDetails}
               />
               {validation.fieldErrors.agentName && <small>{validation.fieldErrors.agentName}</small>}
@@ -297,7 +297,7 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
                 value={review.callId}
                 onChange={(event) => updateField('callId', event.target.value)}
                 onBlur={() => updateField('callId', normalizeCallId(review.callId))}
-                placeholder="CA1579daea5e20c6f8c42d09d1c4158cff"
+                placeholder=""
                 disabled={!user.permissions.canEditAgentDetails}
               />
               {user.guidedMode && <em>Use CA followed by 32 hexadecimal characters.</em>}
@@ -317,10 +317,10 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
               <input
                 value={review.confirmationNumber}
                 onChange={(event) => updateField('confirmationNumber', event.target.value)}
-                placeholder="Any booking or supplier reference"
+                placeholder=""
                 disabled={!user.permissions.canEditAgentDetails}
               />
-              <em>Any itinerary, confirmation, reservation, or supplier reference is accepted.</em>
+              
               {validation.fieldErrors.confirmationNumber && <small>{validation.fieldErrors.confirmationNumber}</small>}
             </label>
 
@@ -329,7 +329,7 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
               <input
                 value={review.callLength}
                 onChange={(event) => updateField('callLength', event.target.value)}
-                placeholder="12:24"
+                placeholder=""
                 disabled={!user.permissions.canEditAgentDetails}
               />
               {validation.fieldErrors.callLength && <small>{validation.fieldErrors.callLength}</small>}
