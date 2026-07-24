@@ -1,0 +1,430 @@
+import { useEffect, useMemo, useState } from 'react'
+import { createCriterionAnswers, createReviewDraft, localDateInput, pointsForStatus } from '../data/defaults'
+import type {
+  AppSettings,
+  CriterionAnswer,
+  CriterionStatus,
+  QaType,
+  QaUser,
+  ReviewDraft,
+} from '../types'
+
+interface ReviewPageProps {
+  user: QaUser
+  settings: AppSettings
+  evaluators: QaUser[]
+  onSave: (review: ReviewDraft) => Promise<void>
+  saving: boolean
+}
+
+interface ValidationState {
+  errors: string[]
+  fieldErrors: Record<string, string>
+}
+
+function normalizeCallId(value: string): string {
+  const cleaned = value.replace(/\s+/g, '')
+  if (/^ca/i.test(cleaned)) return `CA${cleaned.slice(2)}`
+  return cleaned
+}
+
+function validateReview(review: ReviewDraft, user: QaUser, settings: AppSettings): ValidationState {
+  const errors: string[] = []
+  const fieldErrors: Record<string, string> = {}
+  const add = (field: string, message: string) => {
+    fieldErrors[field] = message
+    errors.push(message)
+  }
+
+  if (!review.agentStartDate) add('agentStartDate', 'Add the agent start date.')
+  if (!review.todayDate) add('todayDate', 'Today’s date is missing.')
+  if (!review.evaluator) add('evaluator', 'Choose an evaluator.')
+  if (!review.agentName.trim()) add('agentName', 'Add the agent name.')
+  if (!review.callCenter) add('callCenter', 'Choose the call center.')
+  if (settings.rules.callIdRequired && !review.callId.trim()) add('callId', 'Add the Call ID.')
+  if (!review.qaType) add('qaType', 'Choose CS or Groups.')
+  if (settings.rules.confirmationRequired && review.confirmationNumber.trim().length < 2) {
+    add('confirmationNumber', 'Add an itinerary, confirmation number, reservation number, or booking reference.')
+  }
+  if (!review.callLength.trim()) add('callLength', 'Add the call length.')
+  if (!review.callDate) add('callDate', 'Add the date of the call.')
+
+  if (user.guidedMode && review.callId.trim()) {
+    try {
+      const expression = new RegExp(settings.rules.guidedCallIdPattern)
+      if (!expression.test(review.callId.trim())) {
+        add('callId', 'The Call ID must start with CA and contain exactly 32 hexadecimal characters after CA.')
+      }
+    } catch {
+      add('callId', 'The guided Call ID rule is not configured correctly. Ask an administrator to check Settings.')
+    }
+  }
+
+  review.criteria.forEach((criterion, index) => {
+    if (!criterion.status) {
+      add(`criterion-${index}`, `Select a status for criterion ${criterion.number}: ${criterion.name}.`)
+    }
+
+    if (
+      settings.rules.noteRequiredForMarkdownOrPartial &&
+      (criterion.status === '✕ Markdown' || criterion.status === 'Partial') &&
+      !criterion.customNote.trim()
+    ) {
+      add(`note-${index}`, `Add a clear note for criterion ${criterion.number} because ${criterion.status} was selected.`)
+    }
+  })
+
+  return { errors, fieldErrors }
+}
+
+export function ReviewPage({ user, settings, evaluators, onSave, saving }: ReviewPageProps) {
+  const [review, setReview] = useState<ReviewDraft>(() => createReviewDraft(settings, user.displayName))
+  const [validation, setValidation] = useState<ValidationState>({ errors: [], fieldErrors: {} })
+  const [showChecklist, setShowChecklist] = useState(false)
+
+  useEffect(() => {
+    setReview((current) => ({
+      ...current,
+      evaluator: user.role === 'admin' ? current.evaluator || user.displayName : user.displayName,
+      todayDate: localDateInput(),
+    }))
+  }, [user.displayName, user.role])
+
+  const score = useMemo(
+    () => review.criteria.reduce((sum, criterion) => sum + criterion.autoPoints, 0),
+    [review.criteria],
+  )
+  const kpi = review.qaType === 'Groups' ? settings.rules.groupsKpi : settings.rules.csKpi
+  const result = score >= kpi ? 'PASS' : 'FAIL'
+  const markdowns = review.criteria.filter((criterion) => criterion.status === '✕ Markdown').length
+
+  const updateField = <K extends keyof ReviewDraft>(field: K, value: ReviewDraft[K]) => {
+    setReview((current) => ({ ...current, [field]: value }))
+    setValidation((current) => {
+      const next = { ...current.fieldErrors }
+      delete next[String(field)]
+      return { errors: current.errors, fieldErrors: next }
+    })
+  }
+
+  const updateQaType = (qaType: QaType) => {
+    setReview((current) => ({
+      ...current,
+      qaType,
+      criteria: createCriterionAnswers(settings, qaType),
+    }))
+    setValidation({ errors: [], fieldErrors: {} })
+  }
+
+  const updateCriterion = (index: number, patch: Partial<CriterionAnswer>) => {
+    setReview((current) => ({
+      ...current,
+      criteria: current.criteria.map((criterion, criterionIndex) => {
+        if (criterionIndex !== index) return criterion
+        const updated = { ...criterion, ...patch }
+        updated.partialPoints = updated.points / 2
+        updated.autoPoints = pointsForStatus(updated.points, updated.status)
+        return updated
+      }),
+    }))
+
+    setValidation((current) => {
+      const next = { ...current.fieldErrors }
+      delete next[`criterion-${index}`]
+      if (patch.customNote) delete next[`note-${index}`]
+      return { errors: current.errors, fieldErrors: next }
+    })
+  }
+
+  const prepareSubmit = () => {
+    const nextReview = {
+      ...review,
+      callId: normalizeCallId(review.callId),
+      todayDate: localDateInput(),
+      evaluator: user.role === 'admin' ? review.evaluator : user.displayName,
+    }
+    setReview(nextReview)
+
+    const nextValidation = validateReview(nextReview, user, settings)
+    setValidation(nextValidation)
+
+    if (nextValidation.errors.length) {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      return
+    }
+
+    if (user.guidedMode) {
+      setShowChecklist(true)
+      return
+    }
+
+    void submit(nextReview)
+  }
+
+  const submit = async (value = review) => {
+    try {
+      await onSave(value)
+      setReview(createReviewDraft(settings, user.displayName, value.qaType))
+      setValidation({ errors: [], fieldErrors: {} })
+      setShowChecklist(false)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    } catch {
+      setShowChecklist(false)
+    }
+  }
+
+  if (!user.permissions.canSubmitReviews) {
+    return (
+      <section className="panel empty-state">
+        Your account can’t submit reviews. An administrator can change this in Admin Control.
+      </section>
+    )
+  }
+
+  return (
+    <div className="page-stack">
+      {user.guidedMode && (
+        <section className="guided-banner">
+          <div className="guided-icon">✓</div>
+          <div>
+            <strong>Guided Mode is on</strong>
+            <p>
+              This mode gives friendly reminders, keeps scoring fields locked, and asks for a final double-check before saving.
+            </p>
+          </div>
+        </section>
+      )}
+
+      {validation.errors.length > 0 && (
+        <section className="error-summary" role="alert">
+          <strong>Please fix {validation.errors.length} item{validation.errors.length === 1 ? '' : 's'} before saving:</strong>
+          <ul>
+            {validation.errors.slice(0, 8).map((error) => <li key={error}>{error}</li>)}
+          </ul>
+        </section>
+      )}
+
+      <section className="qa-sheet-card">
+        <div className="qa-sheet-header">
+          <div>
+            <p>HotelPlanner Quality Assurance</p>
+            <h1>QA Scorer</h1>
+          </div>
+          <p className="qa-instruction">Select ✓ / ✕ / N/A / Partial for every criterion.</p>
+        </div>
+
+        <div className="form-score-layout">
+          <div className="details-grid">
+            <label className={validation.fieldErrors.agentStartDate ? 'field invalid' : 'field'}>
+              <span>Agent Start Date</span>
+              <input
+                type="date"
+                value={review.agentStartDate}
+                onChange={(event) => updateField('agentStartDate', event.target.value)}
+                disabled={!user.permissions.canEditAgentDetails}
+              />
+              {validation.fieldErrors.agentStartDate && <small>{validation.fieldErrors.agentStartDate}</small>}
+            </label>
+
+            <label className="field locked-field">
+              <span>Today’s Date</span>
+              <input type="date" value={review.todayDate} readOnly />
+            </label>
+
+            <label className={validation.fieldErrors.evaluator ? 'field invalid' : 'field'}>
+              <span>Evaluator</span>
+              {user.role === 'admin' ? (
+                <select value={review.evaluator} onChange={(event) => updateField('evaluator', event.target.value)}>
+                  {evaluators.filter((evaluator) => evaluator.active).map((evaluator) => (
+                    <option key={evaluator.email} value={evaluator.displayName}>{evaluator.displayName}</option>
+                  ))}
+                </select>
+              ) : (
+                <input value={user.displayName} readOnly />
+              )}
+            </label>
+
+            <label className={validation.fieldErrors.agentName ? 'field invalid' : 'field'}>
+              <span>Agent Name</span>
+              <input
+                value={review.agentName}
+                onChange={(event) => updateField('agentName', event.target.value)}
+                placeholder="Enter the reviewed agent"
+                disabled={!user.permissions.canEditAgentDetails}
+              />
+              {validation.fieldErrors.agentName && <small>{validation.fieldErrors.agentName}</small>}
+            </label>
+
+            <label className={validation.fieldErrors.callCenter ? 'field invalid' : 'field'}>
+              <span>Call Center</span>
+              <select
+                value={review.callCenter}
+                onChange={(event) => updateField('callCenter', event.target.value)}
+                disabled={!user.permissions.canEditAgentDetails}
+              >
+                <option value="">Select a call center</option>
+                {settings.callCenters.map((center) => <option key={center} value={center}>{center}</option>)}
+              </select>
+              {validation.fieldErrors.callCenter && <small>{validation.fieldErrors.callCenter}</small>}
+            </label>
+
+            <label className={validation.fieldErrors.callId ? 'field invalid' : 'field'}>
+              <span>Call ID</span>
+              <input
+                value={review.callId}
+                onChange={(event) => updateField('callId', event.target.value)}
+                onBlur={() => updateField('callId', normalizeCallId(review.callId))}
+                placeholder="CA1579daea5e20c6f8c42d09d1c4158cff"
+                disabled={!user.permissions.canEditAgentDetails}
+              />
+              {user.guidedMode && <em>Use CA followed by 32 hexadecimal characters.</em>}
+              {validation.fieldErrors.callId && <small>{validation.fieldErrors.callId}</small>}
+            </label>
+
+            <label className={validation.fieldErrors.qaType ? 'field invalid' : 'field'}>
+              <span>QA Type</span>
+              <select value={review.qaType} onChange={(event) => updateQaType(event.target.value as QaType)}>
+                <option value="CS">CS</option>
+                <option value="Groups">Groups</option>
+              </select>
+            </label>
+
+            <label className={validation.fieldErrors.confirmationNumber ? 'field invalid' : 'field'}>
+              <span>Confirmation / Itinerary #</span>
+              <input
+                value={review.confirmationNumber}
+                onChange={(event) => updateField('confirmationNumber', event.target.value)}
+                placeholder="Any booking or supplier reference"
+                disabled={!user.permissions.canEditAgentDetails}
+              />
+              <em>Any itinerary, confirmation, reservation, or supplier reference is accepted.</em>
+              {validation.fieldErrors.confirmationNumber && <small>{validation.fieldErrors.confirmationNumber}</small>}
+            </label>
+
+            <label className={validation.fieldErrors.callLength ? 'field invalid' : 'field'}>
+              <span>Length of Call</span>
+              <input
+                value={review.callLength}
+                onChange={(event) => updateField('callLength', event.target.value)}
+                placeholder="12:24"
+                disabled={!user.permissions.canEditAgentDetails}
+              />
+              {validation.fieldErrors.callLength && <small>{validation.fieldErrors.callLength}</small>}
+            </label>
+
+            <label className={validation.fieldErrors.callDate ? 'field invalid' : 'field'}>
+              <span>Date of Call</span>
+              <input
+                type="date"
+                value={review.callDate}
+                onChange={(event) => updateField('callDate', event.target.value)}
+                disabled={!user.permissions.canEditAgentDetails}
+              />
+              {validation.fieldErrors.callDate && <small>{validation.fieldErrors.callDate}</small>}
+            </label>
+          </div>
+
+          <aside className="score-panel">
+            <div><span>Final Score</span><strong>{score}</strong></div>
+            <div><span>KPI Target</span><strong>{kpi}</strong></div>
+            <div><span>Result</span><strong className={result === 'PASS' ? 'pass-text' : 'fail-text'}>{result}</strong></div>
+            <div><span>Markdowns</span><strong>{markdowns}</strong></div>
+          </aside>
+        </div>
+
+        <div className="criteria-table-wrap">
+          <table className="criteria-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>QA Criteria</th>
+                <th>Max</th>
+                <th>Select</th>
+                <th>Partial Points</th>
+                <th>Auto Points</th>
+                <th>Notes / Issue Found</th>
+                <th>Custom Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {review.criteria.map((criterion, index) => (
+                <tr key={`${review.qaType}-${criterion.number}`}>
+                  <td data-label="#">{criterion.number}</td>
+                  <td data-label="QA Criteria"><strong>{criterion.name}</strong></td>
+                  <td data-label="Max">{criterion.points}</td>
+                  <td data-label="Select" className={validation.fieldErrors[`criterion-${index}`] ? 'cell-invalid' : ''}>
+                    <select
+                      value={criterion.status}
+                      onChange={(event) => updateCriterion(index, { status: event.target.value as CriterionStatus })}
+                      disabled={!user.permissions.canEditCriteriaSelections}
+                    >
+                      <option value="">Select</option>
+                      {settings.statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
+                    </select>
+                    {validation.fieldErrors[`criterion-${index}`] && <small>{validation.fieldErrors[`criterion-${index}`]}</small>}
+                  </td>
+                  <td data-label="Partial Points">{criterion.status === 'Partial' ? criterion.partialPoints : ''}</td>
+                  <td data-label="Auto Points"><strong>{criterion.autoPoints || (criterion.status ? 0 : '')}</strong></td>
+                  <td data-label="Notes / Issue Found"><p>{criterion.notes}</p></td>
+                  <td data-label="Custom Notes" className={validation.fieldErrors[`note-${index}`] ? 'cell-invalid' : ''}>
+                    <textarea
+                      value={criterion.customNote}
+                      onChange={(event) => updateCriterion(index, { customNote: event.target.value })}
+                      placeholder={criterion.status === '✕ Markdown' || criterion.status === 'Partial' ? 'Explain the issue clearly…' : 'Optional note'}
+                      disabled={!user.permissions.canEditCustomNotes}
+                    />
+                    {validation.fieldErrors[`note-${index}`] && <small>{validation.fieldErrors[`note-${index}`]}</small>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="save-bar">
+          <div>
+            <strong>Ready to save?</strong>
+            <span>The review will be added to the existing Agents Reviewed tab.</span>
+          </div>
+          <button type="button" className="primary-button save-button" onClick={prepareSubmit} disabled={saving}>
+            {saving ? 'Saving Review…' : 'Save Review'}
+          </button>
+        </div>
+      </section>
+
+      {showChecklist && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-card checklist-modal" role="dialog" aria-modal="true" aria-labelledby="checklist-title">
+            <p className="eyebrow">Friendly final check</p>
+            <h2 id="checklist-title">Please confirm these details</h2>
+            <div className="checklist">
+              <label><input type="checkbox" required /> The Call ID belongs to this exact call.</label>
+              <label><input type="checkbox" required /> The booking reference belongs to this guest.</label>
+              <label><input type="checkbox" required /> The call center, QA type, call length, and call date are correct.</label>
+              <label><input type="checkbox" required /> Every criterion status and required note was checked.</label>
+            </div>
+            <p className="kind-note">Take your time. This extra check is here to help prevent small mistakes.</p>
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" onClick={() => setShowChecklist(false)}>Go Back</button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => {
+                  const checkboxes = Array.from(document.querySelectorAll<HTMLInputElement>('.checklist input[type="checkbox"]'))
+                  if (!checkboxes.every((checkbox) => checkbox.checked)) {
+                    window.alert('Please check all four boxes before saving.')
+                    return
+                  }
+                  void submit(review)
+                }}
+                disabled={saving}
+              >
+                {saving ? 'Saving…' : 'Confirm and Save'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  )
+}

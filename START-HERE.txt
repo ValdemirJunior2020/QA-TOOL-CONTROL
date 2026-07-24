@@ -1,0 +1,11 @@
+1. Read README.md.
+2. Add apps-script/ReactQaApi.gs as a NEW file in your existing Apps Script project.
+3. Run qaAppSetup once.
+4. Update the existing Apps Script Web App deployment to a new version.
+5. Paste your existing /exec URL into .env and Netlify.
+6. Add the same Google Web OAuth client ID to VITE_GOOGLE_CLIENT_ID and GOOGLE_CLIENT_ID.
+7. Run npm install.
+8. For local test buttons only, set VITE_ENABLE_DEV_LOGIN=true and ALLOW_DEV_BYPASS=true.
+9. Run npm run dev.
+
+The uploaded message did not include the exact /exec URL, so it is the only value that still needs to be pasted into .env.
