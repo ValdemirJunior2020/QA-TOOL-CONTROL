@@ -98,7 +98,7 @@ export function Shell({
             </span>
           </a>
 
-         <a
+<a
   href="https://docs.google.com/spreadsheets/d/1GpR3siePgY45jGJfsAB2Q1obCW34A-tfKJOrI8ruEwg/export?format=xlsx"
   className="sidebar-tool-button download-excel-button"
 >
