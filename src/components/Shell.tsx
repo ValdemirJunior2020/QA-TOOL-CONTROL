@@ -43,7 +43,8 @@ export function Shell({
   ]
 
   const currentPageTitle =
-    items.find((item) => item.id === activePage)?.label ?? 'QA Control Center'
+    items.find((item) => item.id === activePage)?.label ??
+    'QA Control Center'
 
   return (
     <div className="app-shell">
@@ -78,6 +79,7 @@ export function Shell({
             className="sidebar-tool-button agent-picks-button"
           >
             <span>Agent&apos;s Pick Page</span>
+
             <span className="external-arrow" aria-hidden="true">
               ↗
             </span>
@@ -90,8 +92,22 @@ export function Shell({
             className="sidebar-tool-button sheet-button"
           >
             <span>Open Google Sheet</span>
+
             <span className="external-arrow" aria-hidden="true">
               ↗
+            </span>
+          </a>
+
+          <a
+            href="https://docs.google.com/spreadsheets/d/1GpR3siePgY45jGJfsAB2Q1obCW34A-tfKJOrI8ruEwg/export?format=xlsx"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="sidebar-tool-button download-excel-button"
+          >
+            <span>Download Reviews Excel</span>
+
+            <span className="external-arrow" aria-hidden="true">
+              ↓
             </span>
           </a>
         </nav>
