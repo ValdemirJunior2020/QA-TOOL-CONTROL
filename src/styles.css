@@ -83,11 +83,86 @@ h1 { letter-spacing: -0.035em; }
 .dev-login-panel small { color: #667085; }
 .floating-auth-error { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 10; width: min(540px, calc(100% - 32px)); box-shadow: var(--shadow); }
 
-.loading-screen { min-height: 100vh; display: grid; place-content: center; justify-items: center; text-align: center; padding: 24px; background: #f4f6fb; }
-.loading-screen h1 { color: #17124f; margin-bottom: 8px; }
-.loading-screen p { color: var(--muted); }
-.spinner { width: 48px; height: 48px; border: 5px solid #ddd7f7; border-top-color: #35247c; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 18px; }
-@keyframes spin { to { transform: rotate(360deg); } }
+.loading-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  text-align: center;
+  background:
+    radial-gradient(circle at 18% 18%, rgba(253, 224, 71, 0.18), transparent 28%),
+    radial-gradient(circle at 82% 12%, rgba(91, 33, 182, 0.16), transparent 34%),
+    #f4f6fb;
+}
+
+.loading-content {
+  width: min(720px, 100%);
+}
+
+.loading-screen h1 {
+  margin: 0;
+  color: #17124f;
+  font-size: clamp(30px, 5vw, 46px);
+  font-weight: 900;
+  letter-spacing: -0.035em;
+}
+
+.loading-funny-message {
+  min-height: 64px;
+  margin: 16px auto 0;
+  color: #4b5563;
+  font-size: clamp(17px, 2.2vw, 21px);
+  font-weight: 800;
+  line-height: 1.55;
+  animation: qa-loading-message-enter 0.45s ease;
+}
+
+.loading-message-counter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 18px;
+  padding: 8px 14px;
+  border: 1px solid #ddd6fe;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #5b21b6;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow: 0 8px 24px rgba(46, 27, 117, 0.08);
+}
+
+.spinner {
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 24px;
+  border: 6px solid #ddd7f7;
+  border-top-color: #35247c;
+  border-right-color: #5b21b6;
+  border-radius: 50%;
+  animation: spin 0.85s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes qa-loading-message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 
 .app-shell { min-height: 100vh; display: grid; grid-template-columns: 250px minmax(0, 1fr); }
 .sidebar {
@@ -461,5 +536,26 @@ h1 { letter-spacing: -0.035em; }
   .agent-picks-button,
   .download-excel-button {
     margin-top: 0;
+  }
+}
+
+/* =========================================================
+   FUNNY QA LOADING SCREEN - MOBILE & ACCESSIBILITY
+   ========================================================= */
+
+@media (max-width: 600px) {
+  .loading-screen {
+    padding: 24px;
+  }
+
+  .loading-funny-message {
+    min-height: 92px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .loading-funny-message {
+    animation: none;
   }
 }

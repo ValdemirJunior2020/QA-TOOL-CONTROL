@@ -15,6 +15,60 @@ interface ToastState {
   message: string
 }
 
+const LOADING_MESSAGES = [
+  'Finding the agent who said “please hold” and disappeared…',
+  'Checking whether the Call ID belongs to this exact call…',
+  'Counting how many times the guest repeated the confirmation number…',
+  'Making sure nobody promised a refund without checking the matrix…',
+  'Looking for the agent who forgot to document the notes…',
+  'Checking whether the guest was placed on hold without an update…',
+  'Verifying whether the agent remembered the closing recap…',
+  'Searching for mysterious dead air in the call…',
+  'Making sure “I understand” was followed by an actual solution…',
+  'Checking whether the correct hotel was booked this time…',
+  'Reviewing whether the guest’s email was verified correctly…',
+  'Investigating why the call lasted 37 minutes…',
+  'Checking whether the agent followed the process or invented one…',
+  'Preparing the QA score while protecting everyone’s feelings…',
+  'Connecting to Google Sheets before another call needs reviewing…',
+]
+
+function LoadingScreen() {
+  const [messageIndex, setMessageIndex] = useState(0)
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setMessageIndex((currentIndex) => (currentIndex + 1) % LOADING_MESSAGES.length)
+    }, 3000)
+
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [])
+
+  return (
+    <main className="loading-screen">
+      <div className="loading-content">
+        <div className="spinner" aria-hidden="true" />
+
+        <h1>Loading QA Control Center…</h1>
+
+        <p
+          key={messageIndex}
+          className="loading-funny-message"
+          aria-live="polite"
+        >
+          {LOADING_MESSAGES[messageIndex]}
+        </p>
+
+        <span className="loading-message-counter">
+          QA check {messageIndex + 1} of {LOADING_MESSAGES.length}
+        </span>
+      </div>
+    </main>
+  )
+}
+
 export default function App() {
   const [session, setSession] = useState<AuthSession | null>(() => loadSession())
   const [currentUser, setCurrentUser] = useState<QaUser | null>(null)
@@ -164,13 +218,7 @@ export default function App() {
   }
 
   if (session && loading) {
-    return (
-      <main className="loading-screen">
-        <div className="spinner" />
-        <h1>Loading QA Control Center…</h1>
-        <p>Checking your access and connecting to the Google Sheet.</p>
-      </main>
-    )
+    return <LoadingScreen />
   }
 
   if (!session || !currentUser) {
