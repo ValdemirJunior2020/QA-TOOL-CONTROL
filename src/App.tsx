@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { GoogleSignIn } from './components/GoogleSignIn'
 import { Shell, type AppPage } from './components/Shell'
 import { DEFAULT_SETTINGS } from './data/defaults'
-import { bootstrap, createQaBackup, exportReviewsWorkbook, fetchReviews, markReviewEmailSent, restoreLatestQaBackup, saveReview, saveSettings, saveUser, setUserBlocked } from './lib/api'
+import { bootstrap, createQaBackup, exportReviewsWorkbook, fetchReviews, getPresence, markReviewEmailSent, removePresence, restoreLatestQaBackup, saveReview, saveSettings, saveUser, setUserBlocked, updatePresence, type PresenceUser } from './lib/api'
 import { clearSession, loadSession, saveSession } from './lib/auth'
 import { AdminPage } from './pages/AdminPage'
 import { DashboardPage } from './pages/DashboardPage'
@@ -18,8 +18,17 @@ interface ToastState {
 const LOADING_MESSAGES = [
   'Finding the agent who said “please hold” and disappeared…',
   'Checking whether the Call ID belongs to this exact call…',
+  'Making sure Kelly doesn’t have to memorize 400 QA rules…',
+  'One click at a time... Kelly’s got this! 👍',
+  'Waiting for Junior the QA Wizard to finish casting the perfect-score spell… 🧙‍♂️',
+'Junior is working his spreadsheet magic—please do not disturb the wizard… ✨',
+  'Making sure Barbara doesn’t have to send another reminder email… 📧',
   'Counting how many times the guest repeated the confirmation number…',
   'Making sure nobody promised a refund without checking the matrix…',
+  'Checking if the matrix has another surprise update…',
+  'Convincing Google Sheets to cooperate today…',
+  'Making sure Kelly doesn’t have to memorize 400 QA rules…',
+  'Guided Mode is helping Kelly avoid accidental QA adventures…',
   'Looking for the agent who forgot to document the notes…',
   'Checking whether the guest was placed on hold without an update…',
   'Verifying whether the agent remembered the closing recap…',
@@ -31,7 +40,36 @@ const LOADING_MESSAGES = [
   'Checking whether the agent followed the process or invented one…',
   'Preparing the QA score while protecting everyone’s feelings…',
   'Connecting to Google Sheets before another call needs reviewing…',
+  'Loading the dashboard while pretending everything is under control… 😄'
 ]
+
+
+const PRESENCE_HEARTBEAT_MS = 20_000
+const PRESENCE_REFRESH_MS = 20_000
+
+function createPresenceSessionId(): string {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
+    return crypto.randomUUID()
+  }
+
+  return `qa-presence-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}`
+}
+
+function getPresencePageLabel(page: AppPage): string {
+  const labels: Record<AppPage, string> = {
+    dashboard: 'Dashboard',
+    review: 'New Review',
+    history: 'Review History',
+    admin: 'Admin Control',
+  }
+
+  return labels[page]
+}
 
 function LoadingScreen() {
   const [messageIndex, setMessageIndex] = useState(0)
@@ -39,7 +77,7 @@ function LoadingScreen() {
   useEffect(() => {
     const intervalId = window.setInterval(() => {
       setMessageIndex((currentIndex) => (currentIndex + 1) % LOADING_MESSAGES.length)
-    }, 3000)
+    }, 4000)
 
     return () => {
       window.clearInterval(intervalId)
@@ -81,6 +119,9 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [authError, setAuthError] = useState('')
   const [toast, setToast] = useState<ToastState | null>(null)
+  const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([])
+  const presenceSessionIdRef = useRef(createPresenceSessionId())
+  const activePageRef = useRef<AppPage>('dashboard')
 
   const showToast = useCallback((message: string, type: ToastState['type'] = 'info') => {
     setToast({ message, type })
@@ -117,19 +158,125 @@ export default function App() {
     if (session) void loadApp(session)
   }, [loadApp, session])
 
+  useEffect(() => {
+    activePageRef.current = activePage
+
+    if (!session || !currentUser) return
+
+    void updatePresence(
+      session,
+      getPresencePageLabel(activePage),
+      presenceSessionIdRef.current,
+    )
+      .then(() => getPresence(session))
+      .then((liveUsers) => setPresenceUsers(liveUsers))
+      .catch((error) => {
+        console.warn(
+          'Live presence page update failed.',
+          error,
+        )
+      })
+  }, [activePage, session, currentUser])
+
+  useEffect(() => {
+    if (!session || !currentUser) return
+
+    let disposed = false
+    let heartbeatInProgress = false
+
+    const refreshPresence = async () => {
+      if (heartbeatInProgress || disposed) return
+      heartbeatInProgress = true
+
+      try {
+        await updatePresence(
+          session,
+          getPresencePageLabel(activePageRef.current),
+          presenceSessionIdRef.current,
+        )
+
+        const liveUsers = await getPresence(session)
+        if (!disposed) setPresenceUsers(liveUsers)
+      } catch (error) {
+        // Presence must never interrupt reviews, reports, or saving.
+        console.warn('Live presence heartbeat failed.', error)
+      } finally {
+        heartbeatInProgress = false
+      }
+    }
+
+    void refreshPresence()
+
+    const heartbeatId = window.setInterval(
+      () => void refreshPresence(),
+      PRESENCE_HEARTBEAT_MS,
+    )
+
+    const refreshId = window.setInterval(async () => {
+      try {
+        const liveUsers = await getPresence(session)
+        if (!disposed) setPresenceUsers(liveUsers)
+      } catch (error) {
+        console.warn('Live presence refresh failed.', error)
+      }
+    }, PRESENCE_REFRESH_MS)
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshPresence()
+      }
+    }
+
+    const handleFocus = () => {
+      void refreshPresence()
+    }
+
+    document.addEventListener(
+      'visibilitychange',
+      handleVisibilityChange,
+    )
+    window.addEventListener('focus', handleFocus)
+
+    return () => {
+      disposed = true
+      window.clearInterval(heartbeatId)
+      window.clearInterval(refreshId)
+      document.removeEventListener(
+        'visibilitychange',
+        handleVisibilityChange,
+      )
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [session, currentUser])
+
   const handleLogin = (nextSession: AuthSession) => {
     saveSession(nextSession)
     setSession(nextSession)
   }
 
   const handleLogout = () => {
+    const activeSession = session
+    const presenceSessionId = presenceSessionIdRef.current
+
+    if (activeSession) {
+      void removePresence(
+        activeSession,
+        presenceSessionId,
+      ).catch((error) => {
+        console.warn('Presence logout cleanup failed.', error)
+      })
+    }
+
     clearSession()
     if (window.google) window.google.accounts.id.disableAutoSelect()
     setSession(null)
     setCurrentUser(null)
     setUsers([])
     setReviews([])
+    setPresenceUsers([])
     setActivePage('dashboard')
+    activePageRef.current = 'dashboard'
+    presenceSessionIdRef.current = createPresenceSessionId()
   }
 
   const refreshReviews = async (force = true) => {
@@ -272,7 +419,15 @@ export default function App() {
   const activeEvaluators = users.filter((user) => user.active && user.role !== 'viewer')
 
   return (
-    <Shell user={currentUser} activePage={activePage} onNavigate={setActivePage} onLogout={handleLogout} reviews={reviews}>
+    <Shell
+      user={currentUser}
+      activePage={activePage}
+      onNavigate={setActivePage}
+      onLogout={handleLogout}
+      reviews={reviews}
+      presenceUsers={presenceUsers}
+      teamUsers={users}
+    >
       {activePage === 'dashboard' && (
         <DashboardPage
           user={currentUser}

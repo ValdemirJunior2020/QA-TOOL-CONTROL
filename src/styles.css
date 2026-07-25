@@ -577,3 +577,234 @@ h1 { letter-spacing: -0.035em; }
 .danger-button { border: 1px solid #dc2626; background: #fee2e2; color: #991b1b; border-radius: 10px; padding: 11px 16px; font-weight: 800; cursor: pointer; }
 @media (max-width: 900px) { .guided-progress-grid,.advanced-filters,.dashboard-report-grid { grid-template-columns: 1fr 1fr; } .backup-panel { align-items: stretch; flex-direction: column; } }
 @media (max-width: 600px) { .guided-progress-grid,.advanced-filters,.dashboard-report-grid { grid-template-columns: 1fr; } }
+
+/* =========================================================
+   LIVE TEAM PRESENCE — CONSTANT HEARTBEAT MONITORING
+   ========================================================= */
+
+.live-team-panel {
+  margin: 4px 0 18px;
+  padding: 14px;
+  border: 1px solid rgba(57, 255, 136, 0.22);
+  border-radius: 16px;
+  background:
+    radial-gradient(
+      circle at top right,
+      rgba(57, 255, 136, 0.1),
+      transparent 42%
+    ),
+    rgba(5, 12, 31, 0.52);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 12px 30px rgba(0, 0, 0, 0.18);
+}
+
+.live-team-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.live-team-heading > div {
+  min-width: 0;
+}
+
+.live-team-heading strong,
+.live-team-kicker {
+  display: block;
+}
+
+.live-team-heading strong {
+  margin-top: 2px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 950;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.live-team-kicker {
+  color: #91a0bb;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.live-team-count {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border: 1px solid rgba(57, 255, 136, 0.32);
+  border-radius: 999px;
+  background: rgba(57, 255, 136, 0.1);
+  color: #39ff88;
+  font-size: 9px;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-shadow: 0 0 9px rgba(57, 255, 136, 0.65);
+}
+
+.live-team-list {
+  display: grid;
+  gap: 8px;
+}
+
+.live-team-user {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease,
+    transform 0.2s ease;
+}
+
+.live-team-user.is-online {
+  border-color: rgba(57, 255, 136, 0.27);
+  background: rgba(57, 255, 136, 0.065);
+}
+
+.live-team-user:hover {
+  transform: translateX(2px);
+}
+
+.live-team-user-copy,
+.live-team-status-copy {
+  min-width: 0;
+}
+
+.live-team-user-copy strong,
+.live-team-user-copy span,
+.live-team-status-copy strong,
+.live-team-status-copy span {
+  display: block;
+}
+
+.live-team-user-copy strong {
+  overflow: hidden;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-team-user-copy span {
+  overflow: hidden;
+  margin-top: 3px;
+  color: #aeb8cb;
+  font-size: 9px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-team-status-copy {
+  text-align: right;
+}
+
+.live-team-status-copy span {
+  margin-top: 3px;
+  color: #8f9ab0;
+  font-size: 8px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.live-presence-status--online {
+  color: #39ff88;
+  font-size: 10px;
+  font-weight: 1000;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-shadow:
+    0 0 5px rgba(57, 255, 136, 1),
+    0 0 12px rgba(57, 255, 136, 0.88),
+    0 0 22px rgba(57, 255, 136, 0.62);
+}
+
+.live-presence-status--offline {
+  color: #778197;
+  font-size: 9px;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.live-presence-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.live-presence-dot--online {
+  background: #39ff88;
+  box-shadow:
+    0 0 5px #39ff88,
+    0 0 12px rgba(57, 255, 136, 0.95),
+    0 0 22px rgba(57, 255, 136, 0.7);
+  animation: live-presence-pulse 1.45s ease-in-out infinite;
+}
+
+.live-presence-dot--offline {
+  background: #596277;
+  box-shadow: 0 0 0 3px rgba(89, 98, 119, 0.14);
+}
+
+.live-team-empty {
+  margin: 0;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #aeb8cb;
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+@keyframes live-presence-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.62;
+    transform: scale(1.42);
+  }
+}
+
+@media (max-width: 900px) {
+  .live-team-panel {
+    width: 100%;
+    margin: 0 0 12px;
+  }
+
+  .live-team-list {
+    grid-template-columns: repeat(
+      auto-fit,
+      minmax(190px, 1fr)
+    );
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-presence-dot--online {
+    animation: none;
+  }
+
+  .live-team-user {
+    transition: none;
+  }
+}
+

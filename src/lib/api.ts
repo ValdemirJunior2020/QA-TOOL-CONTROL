@@ -465,3 +465,87 @@ export async function restoreLatestQaBackup(
     'restoreLatestBackup',
   )
 }
+
+export interface PresenceUser {
+  email: string
+  displayName: string
+  role: string
+  currentPage: string
+  lastSeen: string
+  sessionId: string
+  online: boolean
+}
+
+interface PresenceListResponse {
+  success: boolean
+  users?: PresenceUser[]
+  message?: string
+}
+
+export async function updatePresence(
+  session: AuthSession,
+  currentPage: string,
+  sessionId: string,
+): Promise<PresenceUser | null> {
+  const response = await post<{
+    success: boolean
+    presence?: PresenceUser
+    message?: string
+  }>(
+    session,
+    'updatePresence',
+    {
+      currentPage,
+      sessionId,
+    },
+  )
+
+  if (!response.success) {
+    throw new QaApiError(
+      response.message || 'Live presence could not be updated.',
+      'REQUEST_FAILED',
+    )
+  }
+
+  return response.presence || null
+}
+
+export async function getPresence(
+  session: AuthSession,
+): Promise<PresenceUser[]> {
+  const response = await post<PresenceListResponse>(
+    session,
+    'getPresence',
+  )
+
+  if (!response.success) {
+    throw new QaApiError(
+      response.message || 'Live users could not be loaded.',
+      'REQUEST_FAILED',
+    )
+  }
+
+  return response.users || []
+}
+
+export async function removePresence(
+  session: AuthSession,
+  sessionId: string,
+): Promise<void> {
+  const response = await post<{
+    success: boolean
+    message?: string
+  }>(
+    session,
+    'removePresence',
+    { sessionId },
+  )
+
+  if (!response.success) {
+    throw new QaApiError(
+      response.message || 'Live presence could not be removed.',
+      'REQUEST_FAILED',
+    )
+  }
+}
+
