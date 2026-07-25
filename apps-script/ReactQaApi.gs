@@ -14,6 +14,8 @@ const QA_APP_CONFIG = {
   USERS_SHEET_NAME: "QA App Users",
   SETTINGS_SHEET_NAME: "QA App Settings",
   AUDIT_SHEET_NAME: "QA App Audit",
+  EMAIL_DETAILS_SHEET_NAME: "Emails Sent Details",
+  BACKUP_PREFIX: "QA Backup",
   PROXY_SECRET_PROPERTY: "QA_APP_PROXY_SECRET",
   CACHE_KEY: "agent-picks-agents-reviewed-v5",
   ADMIN_EMAILS: [
@@ -131,6 +133,25 @@ function doPost(e) {
     if (action === "savereview") {
       const result = qaAppSaveReview_(ss, actor, request.review || {}, actorName);
       return qaAppJson_(result);
+    }
+
+    if (action === "markemailsent") {
+      const result = qaAppMarkEmailSent_(ss, actor, request);
+      return qaAppJson_(result);
+    }
+
+    if (action === "exportreviews") {
+      return qaAppJson_({ success: true, data: qaAppExportReviews_(ss) });
+    }
+
+    if (action === "createbackup") {
+      qaAppAssertAdmin_(actor);
+      return qaAppJson_({ success: true, message: qaAppCreateBackup_(ss, actorEmail) });
+    }
+
+    if (action === "restorelatestbackup") {
+      qaAppAssertAdmin_(actor);
+      return qaAppJson_({ success: true, message: qaAppRestoreLatestBackup_(ss, actorEmail) });
     }
 
     if (action === "upsertuser") {
@@ -590,6 +611,10 @@ function qaAppDefaultSettings_() {
 
 function qaAppSaveReview_(ss, actor, rawReview, actorName) {
   if (!actor.permissions.canSubmitReviews) throw new Error("Your account cannot submit QA reviews.");
+  const requestId = qaAppCleanText_(rawReview.requestId);
+  if (!requestId) throw new Error("The review request ID is missing. Refresh the app and try again.");
+  const existingRow = qaAppFindReviewByRequestId_(ss, requestId);
+  if (existingRow) return { success: true, message: "This review was already saved in row " + existingRow + ".", duplicate: true };
   if (!actor.permissions.canEditAgentDetails) {
     throw new Error("Your account cannot edit the agent and call details needed for a review.");
   }
@@ -691,6 +716,7 @@ function qaAppSaveReview_(ss, actor, rawReview, actorName) {
   const kpiTarget = qaType === "Groups" ? Number(settings.rules.groupsKpi) : Number(settings.rules.csKpi);
   const result = finalScore >= kpiTarget ? "PASS" : "FAIL";
   const rowNumber = qaAppAppendReview_(ss, {
+    requestId: requestId,
     savedTimestamp: new Date(),
     agentStartDate: agentStartDate,
     todayDate: new Date(),
@@ -798,6 +824,7 @@ function qaAppAppendReview_(ss, review) {
     .map(function(value) { return qaAppCleanText_(value); });
   const valuesByHeader = {};
 
+  valuesByHeader["Request ID"] = review.requestId || "";
   valuesByHeader["Saved Timestamp"] = review.savedTimestamp;
   valuesByHeader["Agent Start Date"] = review.agentStartDate;
   valuesByHeader["Today's Date"] = review.todayDate;
@@ -881,6 +908,7 @@ function qaAppFormatSavedReviewRow_(sheet, row, index) {
 
 function qaAppReviewHeaders_() {
   const headers = [
+    "Request ID",
     "Saved Timestamp",
     "Agent Start Date",
     "Today's Date",
@@ -989,4 +1017,95 @@ function qaAppNormalizeQaType_(value) {
   if (normalized === "cs" || normalized === "customer service") return "CS";
   if (normalized === "groups" || normalized === "group") return "Groups";
   return "";
+}
+
+
+function qaAppFindReviewByRequestId_(ss, requestId) {
+  const sheet = qaAppEnsureReviewHeaders_(ss);
+  if (sheet.getLastRow() < 2) return 0;
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0].map(qaAppCleanText_);
+  const index = headers.indexOf("Request ID");
+  if (index < 0) return 0;
+  const values = sheet.getRange(2, index + 1, sheet.getLastRow() - 1, 1).getDisplayValues();
+  for (let i = 0; i < values.length; i++) if (qaAppCleanText_(values[i][0]) === requestId) return i + 2;
+  return 0;
+}
+
+function qaAppEnsureEmailDetailsSheet_(ss) {
+  let sheet = ss.getSheetByName(QA_APP_CONFIG.EMAIL_DETAILS_SHEET_NAME);
+  if (!sheet) sheet = ss.insertSheet(QA_APP_CONFIG.EMAIL_DETAILS_SHEET_NAME);
+  const headers = ["Timestamp", "Review Row", "Review ID", "Agent Name", "Call Center", "Evaluator", "Call ID", "Itinerary Number", "Email Sent", "Updated By Email", "Updated By Name"];
+  if (sheet.getLastRow() === 0 || !sheet.getRange(1,1).getValue()) sheet.getRange(1,1,1,headers.length).setValues([headers]);
+  qaAppFormatHeader_(sheet, headers.length);
+  sheet.setFrozenRows(1);
+  return sheet;
+}
+
+function qaAppMarkEmailSent_(ss, actor, request) {
+  if (actor.role === "viewer") throw new Error("Viewer accounts cannot change email status.");
+  const rowNumber = Number(request.rowNumber);
+  if (!rowNumber || rowNumber < 2) throw new Error("A valid Agents Reviewed row is required.");
+  const sheet = qaAppEnsureReviewHeaders_(ss);
+  if (rowNumber > sheet.getLastRow()) throw new Error("That review row was not found.");
+  const headers = sheet.getRange(1,1,1,sheet.getLastColumn()).getDisplayValues()[0].map(qaAppCleanText_);
+  const index = qaAppHeaderIndex_(headers);
+  if (index["Email Sent?"] === undefined) throw new Error("Email Sent? column was not found.");
+  const sent = qaAppBoolean_(request.sent);
+  sheet.getRange(rowNumber, index["Email Sent?"] + 1).insertCheckboxes().setValue(sent);
+  const row = sheet.getRange(rowNumber,1,1,sheet.getLastColumn()).getDisplayValues()[0];
+  const get = function(name) { return index[name] === undefined ? "" : row[index[name]]; };
+  const details = qaAppEnsureEmailDetailsSheet_(ss);
+  details.appendRow([new Date(), rowNumber, request.reviewId || "", get("Agent Name"), get("Call Center"), get("Evaluator"), get("Call ID"), get("Itinerary Number"), sent, actor.email, actor.displayName]);
+  details.getRange(details.getLastRow(),1).setNumberFormat("m/d/yyyy h:mm AM/PM");
+  qaAppAudit_(ss, sent ? "EMAIL MARKED SENT" : "EMAIL MARKED NOT SENT", actor.email, "", { rowNumber: rowNumber });
+  try { CacheService.getScriptCache().remove(QA_APP_CONFIG.CACHE_KEY); } catch (error) {}
+  return { success: true, message: "Email status saved and logged in Emails Sent Details." };
+}
+
+function qaAppExportReviews_(ss) {
+  const source = qaAppEnsureReviewHeaders_(ss);
+  const temp = SpreadsheetApp.create("QA Reviews Export " + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HHmmss"));
+  const target = temp.getSheets()[0];
+  target.setName(QA_APP_CONFIG.REVIEW_SHEET_NAME);
+  const range = source.getDataRange();
+  const values = range.getValues();
+  target.getRange(1, 1, values.length, values[0].length).setValues(values);
+  target.setFrozenRows(1);
+  SpreadsheetApp.flush();
+  const url = "https://www.googleapis.com/drive/v3/files/" + temp.getId() + "/export?mimeType=" + encodeURIComponent("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  const response = UrlFetchApp.fetch(url, { headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() } });
+  DriveApp.getFileById(temp.getId()).setTrashed(true);
+  return { filename: "Agents-Reviewed-" + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd") + ".xlsx", base64: Utilities.base64Encode(response.getBlob().getBytes()) };
+}
+
+function qaAppBackupSheetNames_() {
+  return [QA_APP_CONFIG.REVIEW_SHEET_NAME, QA_APP_CONFIG.USERS_SHEET_NAME, QA_APP_CONFIG.SETTINGS_SHEET_NAME, QA_APP_CONFIG.AUDIT_SHEET_NAME, QA_APP_CONFIG.EMAIL_DETAILS_SHEET_NAME];
+}
+
+function qaAppCreateBackup_(ss, actorEmail) {
+  const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd-HHmmss");
+  qaAppBackupSheetNames_().forEach(function(name) {
+    const source = ss.getSheetByName(name);
+    if (!source) return;
+    const copy = source.copyTo(ss).setName(QA_APP_CONFIG.BACKUP_PREFIX + " " + stamp + " - " + name);
+    copy.hideSheet();
+  });
+  PropertiesService.getScriptProperties().setProperty("QA_LATEST_BACKUP_STAMP", stamp);
+  qaAppAudit_(ss, "BACKUP CREATED", actorEmail, "", { stamp: stamp });
+  return "Backup " + stamp + " was created successfully.";
+}
+
+function qaAppRestoreLatestBackup_(ss, actorEmail) {
+  const stamp = String(PropertiesService.getScriptProperties().getProperty("QA_LATEST_BACKUP_STAMP") || "").trim();
+  if (!stamp) throw new Error("No QA backup is available yet.");
+  qaAppBackupSheetNames_().forEach(function(name) {
+    const backup = ss.getSheetByName(QA_APP_CONFIG.BACKUP_PREFIX + " " + stamp + " - " + name);
+    if (!backup) return;
+    let target = ss.getSheetByName(name);
+    if (!target) target = ss.insertSheet(name);
+    target.clear();
+    backup.getDataRange().copyTo(target.getRange(1,1), SpreadsheetApp.CopyPasteType.PASTE_NORMAL, false);
+  });
+  qaAppAudit_(ss, "BACKUP RESTORED", actorEmail, "", { stamp: stamp });
+  return "Backup " + stamp + " was restored.";
 }

@@ -81,14 +81,37 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
   const [review, setReview] = useState<ReviewDraft>(() => createReviewDraft(settings, user.displayName))
   const [validation, setValidation] = useState<ValidationState>({ errors: [], fieldErrors: {} })
   const [showChecklist, setShowChecklist] = useState(false)
+  const [draftRestored, setDraftRestored] = useState(false)
+  const draftKey = `qa-review-draft:${user.email}`
 
   useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(draftKey)
+      if (saved) {
+        const parsed = JSON.parse(saved) as ReviewDraft
+        if (parsed && parsed.agentName !== undefined && Array.isArray(parsed.criteria)) {
+          setReview(parsed)
+          setDraftRestored(true)
+          return
+        }
+      }
+    } catch {
+      window.localStorage.removeItem(draftKey)
+    }
+
     setReview((current) => ({
       ...current,
       evaluator: user.role === 'admin' ? current.evaluator || user.displayName : user.displayName,
       todayDate: localDateInput(),
     }))
-  }, [user.displayName, user.role])
+  }, [draftKey, user.displayName, user.role])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      window.localStorage.setItem(draftKey, JSON.stringify(review))
+    }, 500)
+    return () => window.clearTimeout(timer)
+  }, [draftKey, review])
 
   const score = useMemo(
     () => review.criteria.reduce((sum, criterion) => sum + criterion.autoPoints, 0),
@@ -165,6 +188,8 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
     setReview(createReviewDraft(settings, user.displayName, qaType))
     setValidation({ errors: [], fieldErrors: {} })
     setShowChecklist(false)
+    setDraftRestored(false)
+    window.localStorage.removeItem(draftKey)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -206,6 +231,10 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
 
   return (
     <div className="page-stack">
+      {draftRestored && (
+        <section className="draft-restored-banner">Draft restored automatically. Your unfinished review was recovered from this browser.</section>
+      )}
+
       {user.guidedMode && (
         <section className="guided-banner">
           <div className="guided-icon">✓</div>
@@ -224,6 +253,18 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
           <ul>
             {validation.errors.slice(0, 8).map((error) => <li key={error}>{error}</li>)}
           </ul>
+        </section>
+      )}
+
+      {user.guidedMode && (
+        <section className="guided-progress-card">
+          <strong>Review progress</strong>
+          <div className="guided-progress-grid">
+            <span className={review.agentName && review.callCenter && review.callId ? 'complete' : ''}>Call details {review.agentName && review.callCenter && review.callId ? '✓' : '○'}</span>
+            <span className={review.criteria.every((item) => item.status) ? 'complete' : ''}>Criteria selected {review.criteria.every((item) => item.status) ? '✓' : '○'}</span>
+            <span className={review.criteria.every((item) => !['✕ Markdown', 'Partial'].includes(item.status) || item.customNote.trim()) ? 'complete' : ''}>Required notes {review.criteria.every((item) => !['✕ Markdown', 'Partial'].includes(item.status) || item.customNote.trim()) ? '✓' : '○'}</span>
+            <span className={validation.errors.length === 0 ? 'complete' : ''}>Ready to save {validation.errors.length === 0 ? '✓' : '○'}</span>
+          </div>
         </section>
       )}
 

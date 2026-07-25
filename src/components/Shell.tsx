@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { QaUser } from '../types'
+import type { QaUser, ReviewRecord } from '../types'
 
 export type AppPage = 'dashboard' | 'review' | 'history' | 'admin'
 
@@ -9,6 +9,7 @@ interface ShellProps {
   onNavigate: (page: AppPage) => void
   onLogout: () => void
   children: ReactNode
+  reviews?: ReviewRecord[]
 }
 
 export function Shell({
@@ -17,6 +18,7 @@ export function Shell({
   onNavigate,
   onLogout,
   children,
+  reviews = [],
 }: ShellProps) {
   const items: Array<{
     id: AppPage

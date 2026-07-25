@@ -81,3 +81,31 @@ export async function setUserBlocked(session: AuthSession, email: string, blocke
 export async function saveSettings(session: AuthSession, settings: AppSettings): Promise<ApiResponse<AppSettings>> {
   return post<ApiResponse<AppSettings>>(session, 'saveSettings', { settings })
 }
+
+export async function markReviewEmailSent(
+  session: AuthSession,
+  review: ReviewRecord,
+  sent: boolean,
+): Promise<ApiResponse<ReviewRecord>> {
+  return post<ApiResponse<ReviewRecord>>(session, 'markEmailSent', {
+    rowNumber: review.rowNumber,
+    reviewId: review.id,
+    sent,
+  })
+}
+
+export async function exportReviewsWorkbook(session: AuthSession): Promise<{ filename: string; base64: string }> {
+  const response = await post<ApiResponse<{ filename: string; base64: string }>>(session, 'exportReviews')
+  if (!response.success || !response.data) {
+    throw new Error(response.message || 'The review workbook could not be created.')
+  }
+  return response.data
+}
+
+export async function createQaBackup(session: AuthSession): Promise<ApiResponse> {
+  return post<ApiResponse>(session, 'createBackup')
+}
+
+export async function restoreLatestQaBackup(session: AuthSession): Promise<ApiResponse> {
+  return post<ApiResponse>(session, 'restoreLatestBackup')
+}

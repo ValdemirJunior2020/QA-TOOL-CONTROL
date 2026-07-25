@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { GoogleSignIn } from './components/GoogleSignIn'
 import { Shell, type AppPage } from './components/Shell'
 import { DEFAULT_SETTINGS } from './data/defaults'
-import { bootstrap, fetchReviews, saveReview, saveSettings, saveUser, setUserBlocked } from './lib/api'
+import { bootstrap, createQaBackup, exportReviewsWorkbook, fetchReviews, markReviewEmailSent, restoreLatestQaBackup, saveReview, saveSettings, saveUser, setUserBlocked } from './lib/api'
 import { clearSession, loadSession, saveSession } from './lib/auth'
 import { AdminPage } from './pages/AdminPage'
 import { DashboardPage } from './pages/DashboardPage'
@@ -217,6 +217,45 @@ export default function App() {
     }
   }
 
+
+  const handleMarkEmailSent = async (review: ReviewRecord, sent: boolean) => {
+    if (!session) return
+    const response = await markReviewEmailSent(session, review, sent)
+    if (!response.success) throw new Error(response.message || 'Email status was not saved.')
+    setReviews((current) => current.map((item) => item.rowNumber === review.rowNumber ? { ...item, emailSent: sent, emailSentAt: sent ? new Date().toISOString() : '', emailSentBy: sent ? currentUser?.displayName || '' : '' } : item))
+    showToast(response.message || `Email marked ${sent ? 'sent' : 'not sent'}.`, 'success')
+  }
+
+  const handleDownloadWorkbook = async () => {
+    if (!session) return
+    setBusy(true)
+    try {
+      const file = await exportReviewsWorkbook(session)
+      const bytes = Uint8Array.from(atob(file.base64), (char) => char.charCodeAt(0))
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = file.filename
+      link.click()
+      URL.revokeObjectURL(url)
+    } finally { setBusy(false) }
+  }
+
+  const handleCreateBackup = async () => {
+    if (!session) return
+    const response = await createQaBackup(session)
+    if (!response.success) throw new Error(response.message || 'Backup failed.')
+    showToast(response.message || 'Backup created.', 'success')
+  }
+
+  const handleRestoreLatestBackup = async () => {
+    if (!session || !window.confirm('Restore the latest QA backup? Current tab contents will be replaced.')) return
+    const response = await restoreLatestQaBackup(session)
+    if (!response.success) throw new Error(response.message || 'Restore failed.')
+    showToast(response.message || 'Latest backup restored.', 'success')
+    await refreshReviews(true)
+  }
+
   if (session && loading) {
     return <LoadingScreen />
   }
@@ -233,7 +272,7 @@ export default function App() {
   const activeEvaluators = users.filter((user) => user.active && user.role !== 'viewer')
 
   return (
-    <Shell user={currentUser} activePage={activePage} onNavigate={setActivePage} onLogout={handleLogout}>
+    <Shell user={currentUser} activePage={activePage} onNavigate={setActivePage} onLogout={handleLogout} reviews={reviews}>
       {activePage === 'dashboard' && (
         <DashboardPage
           user={currentUser}
@@ -242,6 +281,8 @@ export default function App() {
           onNewReview={() => setActivePage('review')}
           onRefresh={() => void refreshReviews(true)}
           refreshing={refreshing}
+          onCreateBackup={handleCreateBackup}
+          onRestoreLatestBackup={handleRestoreLatestBackup}
         />
       )}
 
@@ -261,6 +302,8 @@ export default function App() {
           reviews={reviews}
           onRefresh={() => void refreshReviews(true)}
           refreshing={refreshing}
+          onMarkEmailSent={handleMarkEmailSent}
+          onDownloadWorkbook={handleDownloadWorkbook}
         />
       )}
 

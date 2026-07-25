@@ -559,3 +559,21 @@ h1 { letter-spacing: -0.035em; }
     animation: none;
   }
 }
+/* New reliability, reporting, email tracking, and backup features */
+.draft-restored-banner { padding: 14px 18px; border-radius: 12px; background: #fff7d6; border: 1px solid #f59e0b; color: #7c4a03; font-weight: 800; }
+.guided-progress-card { padding: 18px; border-radius: 16px; background: #f5f3ff; border: 1px solid #c4b5fd; }
+.guided-progress-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; margin-top: 12px; }
+.guided-progress-grid span { padding: 10px; border-radius: 10px; background: #fff; color: #64748b; font-weight: 700; }
+.guided-progress-grid span.complete { background: #dcfce7; color: #166534; }
+.history-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+.advanced-filters { grid-template-columns: repeat(4,minmax(150px,1fr)); }
+.email-status-button { border: 1px solid; border-radius: 999px; padding: 7px 11px; font-weight: 800; cursor: pointer; }
+.email-status-button.sent { color: #166534; background: #dcfce7; border-color: #22c55e; }
+.email-status-button.pending { color: #9a3412; background: #ffedd5; border-color: #fb923c; }
+.dashboard-report-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 18px; }
+.metric-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #e5e7eb; }
+.issue-highlight { margin-top: 16px; padding: 16px; border-radius: 12px; background: #fff7ed; color: #9a3412; font-weight: 700; }
+.backup-panel { display: flex; justify-content: space-between; gap: 24px; align-items: center; }
+.danger-button { border: 1px solid #dc2626; background: #fee2e2; color: #991b1b; border-radius: 10px; padding: 11px 16px; font-weight: 800; cursor: pointer; }
+@media (max-width: 900px) { .guided-progress-grid,.advanced-filters,.dashboard-report-grid { grid-template-columns: 1fr 1fr; } .backup-panel { align-items: stretch; flex-direction: column; } }
+@media (max-width: 600px) { .guided-progress-grid,.advanced-filters,.dashboard-report-grid { grid-template-columns: 1fr; } }

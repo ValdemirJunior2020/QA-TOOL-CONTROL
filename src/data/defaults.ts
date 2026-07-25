@@ -142,6 +142,7 @@ export function createCriterionAnswers(settings: AppSettings, qaType: QaType): C
 
 export function createReviewDraft(settings: AppSettings, evaluator: string, qaType: QaType = 'CS'): ReviewDraft {
   return {
+    requestId: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `review-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     agentStartDate: '',
     todayDate: localDateInput(),
     evaluator,

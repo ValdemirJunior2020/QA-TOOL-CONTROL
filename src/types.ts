@@ -59,6 +59,7 @@ export interface CriterionAnswer extends CriterionDefinition {
 }
 
 export interface ReviewDraft {
+  requestId: string
   agentStartDate: string
   todayDate: string
   evaluator: string
@@ -84,6 +85,8 @@ export interface ReviewRecord {
   callId: string
   itineraryNumber: string
   emailSent: boolean
+  emailSentAt?: string
+  emailSentBy?: string
   qaType: QaType
   finalScore: number
   kpiTarget: number
