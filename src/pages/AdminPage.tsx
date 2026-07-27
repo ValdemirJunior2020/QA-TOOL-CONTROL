@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import type { AppSettings, CriterionDefinition, QaType, QaUser, UserRole } from '../types'
 
 const SUPER_ADMIN_EMAIL = 'infojr.83@gmail.com'
-const RETIRED_USER_EMAILS = new Set(['barbara.kalchik8reserve@gmail.com'])
+const RETIRED_USER_EMAILS = new Set(['barbara.kalchik@hotelplanner.com'])
 
 interface AdminPageProps {
   currentUser: QaUser

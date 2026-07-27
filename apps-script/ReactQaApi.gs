@@ -20,8 +20,7 @@ const QA_APP_CONFIG = {
   CACHE_KEY: "agent-picks-agents-reviewed-v5",
   ADMIN_EMAILS: [
     "infojr.83@gmail.com",
-    "barbara.kalchik8reserve@gmail.com",
-    "barbara.kalchik@hotelplanner.com"
+    "barbara.kalchik8reserve@gmail.com"
   ]
 };
 
@@ -288,7 +287,6 @@ function qaAppSeedCoreUsers_(ss) {
   const seeds = [
     qaAppBuildUser_("infojr.83@gmail.com", "Junior", "admin", true, false, "Primary administrator."),
     qaAppBuildUser_("barbara.kalchik8reserve@gmail.com", "Barbara", "admin", true, false, "Administrator."),
-    qaAppBuildUser_("barbara.kalchik@hotelplanner.com", "Barbara", "admin", true, false, "Administrator work account."),
     qaAppBuildUser_(
       "shoultskelly22@gmail.com",
       "Kelly",
@@ -301,7 +299,42 @@ function qaAppSeedCoreUsers_(ss) {
 
   seeds.forEach(function(seed) {
     const existing = qaAppGetUserByEmail_(ss, seed.email);
-    if (!existing) qaAppWriteUser_(ss, seed, "qaAppSetup");
+
+    if (!existing) {
+      qaAppWriteUser_(ss, seed, "qaAppSetup");
+      return;
+    }
+
+    // Repair the required core-account access without creating duplicate rows.
+    // This fixes Barbara when an older row exists but is blocked, has the wrong
+    // role, or has missing permissions.
+    const mustBeAdmin = QA_APP_CONFIG.ADMIN_EMAILS.indexOf(seed.email) >= 0;
+    const repaired = Object.assign({}, existing, {
+      displayName: seed.displayName,
+      role: mustBeAdmin ? "admin" : existing.role,
+      active: true,
+      guidedMode: mustBeAdmin ? false : seed.guidedMode,
+      permissions: mustBeAdmin
+        ? {
+            canSubmitReviews: true,
+            canViewHistory: true,
+            canEditAgentDetails: true,
+            canEditCriteriaSelections: true,
+            canEditCustomNotes: true
+          }
+        : existing.permissions,
+      notes: existing.notes || seed.notes,
+      createdAt: existing.createdAt || seed.createdAt
+    });
+
+    const needsRepair =
+      repaired.displayName !== existing.displayName ||
+      repaired.role !== existing.role ||
+      repaired.active !== existing.active ||
+      repaired.guidedMode !== existing.guidedMode ||
+      JSON.stringify(repaired.permissions) !== JSON.stringify(existing.permissions);
+
+    if (needsRepair) qaAppWriteUser_(ss, repaired, "qaAppSetup-repair");
   });
 }
 
