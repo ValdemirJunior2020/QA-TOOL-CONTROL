@@ -1,4 +1,5 @@
 import { OAuth2Client } from 'google-auth-library'
+import { createVerify } from 'node:crypto'
 
 const jsonHeaders = {
   'Content-Type': 'application/json; charset=utf-8',
@@ -19,6 +20,47 @@ function getBearerToken(headers = {}) {
   return match ? match[1].trim() : ''
 }
 
+function decodeJwtPart(value) {
+  return JSON.parse(Buffer.from(String(value).replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'))
+}
+
+async function verifySignedGoogleTokenWithoutAgeLimit(idToken, googleClientId) {
+  const parts = String(idToken || '').split('.')
+  if (parts.length !== 3) throw new Error('Google returned an invalid sign-in token.')
+
+  const header = decodeJwtPart(parts[0])
+  const payload = decodeJwtPart(parts[1])
+  if (!header.kid || header.alg !== 'RS256') throw new Error('Google returned an invalid token header.')
+
+  const client = new OAuth2Client(googleClientId)
+  const certificateResult = await client.getFederatedSignonCertsAsync()
+  const certificate = certificateResult?.certs?.[header.kid]
+  if (!certificate) throw new Error('Google token certificate was not found.')
+
+  const verifier = createVerify('RSA-SHA256')
+  verifier.update(`${parts[0]}.${parts[1]}`)
+  verifier.end()
+  const signature = Buffer.from(parts[2].replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+  if (!verifier.verify(certificate, signature)) throw new Error('Google token signature is invalid.')
+
+  const issuer = String(payload.iss || '')
+  const audience = Array.isArray(payload.aud) ? payload.aud : [payload.aud]
+  if (!['accounts.google.com', 'https://accounts.google.com'].includes(issuer)) throw new Error('Google token issuer is invalid.')
+  if (!audience.includes(googleClientId)) throw new Error('Google token audience is invalid.')
+  if (!payload.email || payload.email_verified !== true) throw new Error('Google did not verify this email address.')
+
+  // Do not force a time-based logout. The token must still have a valid
+  // Google signature, issuer, audience, and verified email. The browser session
+  // remains active until the user signs out or closes the tab.
+  const issuedAt = Number(payload.iat || 0)
+  const now = Math.floor(Date.now() / 1000)
+  if (!issuedAt || issuedAt > now + 300) {
+    throw new Error('Google returned an invalid token issue time.')
+  }
+
+  return payload
+}
+
 async function verifyIdentity(event) {
   const googleClientId = String(process.env.GOOGLE_CLIENT_ID || '').trim()
   const idToken = getBearerToken(event.headers)
@@ -26,8 +68,16 @@ async function verifyIdentity(event) {
   if (idToken) {
     if (!googleClientId) throw new Error('GOOGLE_CLIENT_ID is not configured in Netlify.')
     const client = new OAuth2Client(googleClientId)
-    const ticket = await client.verifyIdToken({ idToken, audience: googleClientId })
-    const payload = ticket.getPayload()
+    let payload
+    try {
+      const ticket = await client.verifyIdToken({ idToken, audience: googleClientId })
+      payload = ticket.getPayload()
+    } catch (error) {
+      const message = error instanceof Error ? error.message.toLowerCase() : ''
+      if (!message.includes('expired') && !message.includes('used too late')) throw error
+      payload = await verifySignedGoogleTokenWithoutAgeLimit(idToken, googleClientId)
+    }
+
     if (!payload?.email || !payload.email_verified) throw new Error('Google did not verify this email address.')
     return {
       email: payload.email.toLowerCase(),
