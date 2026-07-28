@@ -93,6 +93,9 @@ export interface ReviewRecord {
   result: 'PASS' | 'FAIL'
   markdowns: number
   issueSummary: string
+  callLength?: string
+  callDate?: string
+  criteria?: CriterionAnswer[]
 }
 
 export interface AuthSession {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { GoogleSignIn } from './components/GoogleSignIn'
 import { Shell, type AppPage } from './components/Shell'
 import { DEFAULT_SETTINGS } from './data/defaults'
-import { bootstrap, createQaBackup, exportReviewsWorkbook, fetchReviews, getPresence, markReviewEmailSent, removePresence, restoreLatestQaBackup, saveReview, saveSettings, saveUser, setUserBlocked, updatePresence, type PresenceUser } from './lib/api'
+import { bootstrap, createQaBackup, fetchReviews, getPresence, markReviewEmailSent, removePresence, restoreLatestQaBackup, saveReview, saveSettings, saveUser, setUserBlocked, updatePresence, type PresenceUser } from './lib/api'
 import { clearSession, loadSession, saveSession } from './lib/auth'
 import { AdminPage } from './pages/AdminPage'
 import { DashboardPage } from './pages/DashboardPage'
@@ -373,20 +373,7 @@ export default function App() {
     showToast(response.message || `Email marked ${sent ? 'sent' : 'not sent'}.`, 'success')
   }
 
-  const handleDownloadWorkbook = async () => {
-    if (!session) return
-    setBusy(true)
-    try {
-      const file = await exportReviewsWorkbook(session)
-      const bytes = Uint8Array.from(atob(file.base64), (char) => char.charCodeAt(0))
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
-      const link = document.createElement('a')
-      link.href = url
-      link.download = file.filename
-      link.click()
-      URL.revokeObjectURL(url)
-    } finally { setBusy(false) }
-  }
+  
 
   const handleCreateBackup = async () => {
     if (!session) return
@@ -453,13 +440,12 @@ export default function App() {
 
       {activePage === 'history' && (
         <ReviewsPage
-          user={currentUser}
-          reviews={reviews}
-          onRefresh={() => void refreshReviews(true)}
-          refreshing={refreshing}
-          onMarkEmailSent={handleMarkEmailSent}
-          onDownloadWorkbook={handleDownloadWorkbook}
-        />
+  user={currentUser}
+  reviews={reviews}
+  onRefresh={() => void refreshReviews(true)}
+  refreshing={refreshing}
+  onMarkEmailSent={handleMarkEmailSent}
+/>
       )}
 
       {activePage === 'admin' && currentUser.role === 'admin' && (

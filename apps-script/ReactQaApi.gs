@@ -14,8 +14,8 @@ const QA_APP_CONFIG = {
   USERS_SHEET_NAME: "QA App Users",
   SETTINGS_SHEET_NAME: "QA App Settings",
   AUDIT_SHEET_NAME: "QA App Audit",
-  EMAIL_DETAILS_SHEET_NAME: "Emails Sent Details",
-  BACKUP_PREFIX: "QA Backup",
+  PRESENCE_SHEET_NAME: "QA App Presence",
+  PRESENCE_ONLINE_SECONDS: 65,
   PROXY_SECRET_PROPERTY: "QA_APP_PROXY_SECRET",
   CACHE_KEY: "agent-picks-agents-reviewed-v5",
   ADMIN_EMAILS: [
@@ -49,6 +49,15 @@ const QA_APP_AUDIT_HEADERS = [
   "Details JSON"
 ];
 
+const QA_APP_PRESENCE_HEADERS = [
+  "Email",
+  "Display Name",
+  "Role",
+  "Current Page",
+  "Last Seen",
+  "Session ID"
+];
+
 const QA_APP_SETTINGS_HEADERS = [
   "Key",
   "JSON Value",
@@ -61,6 +70,7 @@ function qaAppSetup() {
   qaAppEnsureUsersSheet_(ss);
   qaAppEnsureSettingsSheet_(ss);
   qaAppEnsureAuditSheet_(ss);
+  qaAppEnsurePresenceSheet_(ss);
   qaAppEnsureReviewHeaders_(ss);
   qaAppSeedCoreUsers_(ss);
   qaAppSeedDefaultSettings_(ss);
@@ -107,6 +117,7 @@ function doPost(e) {
     qaAppEnsureUsersSheet_(ss);
     qaAppEnsureSettingsSheet_(ss);
     qaAppEnsureAuditSheet_(ss);
+    qaAppEnsurePresenceSheet_(ss);
     qaAppSeedCoreUsers_(ss);
     qaAppSeedDefaultSettings_(ss);
 
@@ -132,25 +143,6 @@ function doPost(e) {
     if (action === "savereview") {
       const result = qaAppSaveReview_(ss, actor, request.review || {}, actorName);
       return qaAppJson_(result);
-    }
-
-    if (action === "markemailsent") {
-      const result = qaAppMarkEmailSent_(ss, actor, request);
-      return qaAppJson_(result);
-    }
-
-    if (action === "exportreviews") {
-      return qaAppJson_({ success: true, data: qaAppExportReviews_(ss) });
-    }
-
-    if (action === "createbackup") {
-      qaAppAssertAdmin_(actor);
-      return qaAppJson_({ success: true, message: qaAppCreateBackup_(ss, actorEmail) });
-    }
-
-    if (action === "restorelatestbackup") {
-      qaAppAssertAdmin_(actor);
-      return qaAppJson_({ success: true, message: qaAppRestoreLatestBackup_(ss, actorEmail) });
     }
 
     if (action === "upsertuser") {
@@ -186,6 +178,35 @@ function doPost(e) {
         message: "QA settings were saved. Existing review rows were not changed.",
         settings: savedSettings
       });
+    }
+
+    if (action === "exportfilteredreviews") {
+      const file = qaAppExportFilteredReviews_(ss, actor, request.filters || {});
+      qaAppAudit_(ss, "FILTERED REVIEWS EXPORTED", actorEmail, "", request.filters || {});
+      return qaAppJson_({ success: true, data: file });
+    }
+
+
+    if (action === "updatepresence") {
+      const presence = qaAppUpdatePresence_(
+        ss,
+        actor,
+        request.currentPage,
+        request.sessionId
+      );
+      return qaAppJson_({ success: true, presence: presence });
+    }
+
+    if (action === "getpresence") {
+      return qaAppJson_({
+        success: true,
+        users: qaAppGetPresence_(ss)
+      });
+    }
+
+    if (action === "removepresence") {
+      qaAppRemovePresence_(ss, actorEmail, request.sessionId);
+      return qaAppJson_({ success: true });
     }
 
     throw new Error("Unsupported React API action: " + action);
@@ -271,6 +292,162 @@ function qaAppEnsureAuditSheet_(ss) {
   qaAppFormatHeader_(sheet, QA_APP_AUDIT_HEADERS.length);
   sheet.setFrozenRows(1);
   return sheet;
+}
+
+function qaAppEnsurePresenceSheet_(ss) {
+  let sheet = ss.getSheetByName(QA_APP_CONFIG.PRESENCE_SHEET_NAME);
+  if (!sheet) sheet = ss.insertSheet(QA_APP_CONFIG.PRESENCE_SHEET_NAME);
+
+  if (sheet.getLastRow() === 0 || !sheet.getRange(1, 1).getValue()) {
+    sheet.getRange(1, 1, 1, QA_APP_PRESENCE_HEADERS.length)
+      .setValues([QA_APP_PRESENCE_HEADERS]);
+  }
+
+  qaAppFormatHeader_(sheet, QA_APP_PRESENCE_HEADERS.length);
+  sheet.setFrozenRows(1);
+  return sheet;
+}
+
+function qaAppUpdatePresence_(ss, actor, currentPage, sessionId) {
+  const sheet = qaAppEnsurePresenceSheet_(ss);
+  const email = qaAppNormalizeEmail_(actor.email);
+  const cleanSessionId = qaAppCleanText_(sessionId);
+
+  if (!cleanSessionId) throw new Error("Presence session ID is required.");
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+
+  try {
+    const rowIndex = qaAppFindPresenceRow_(sheet, email, cleanSessionId);
+    const row = [
+      email,
+      qaAppCleanText_(actor.displayName),
+      qaAppCleanText_(actor.role),
+      qaAppCleanText_(currentPage) || "QA App",
+      new Date(),
+      cleanSessionId
+    ];
+
+    if (rowIndex > 0) {
+      sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
+    } else {
+      sheet.appendRow(row);
+    }
+
+    qaAppCleanupPresence_(sheet);
+    return qaAppPresenceObject_(row, true);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function qaAppGetPresence_(ss) {
+  const sheet = qaAppEnsurePresenceSheet_(ss);
+  if (sheet.getLastRow() < 2) return [];
+
+  const rows = sheet.getRange(
+    2,
+    1,
+    sheet.getLastRow() - 1,
+    QA_APP_PRESENCE_HEADERS.length
+  ).getValues();
+
+  const now = Date.now();
+  const onlineWindowMs = Number(QA_APP_CONFIG.PRESENCE_ONLINE_SECONDS || 65) * 1000;
+  const latestByEmail = {};
+
+  rows.forEach(function(row) {
+    const email = qaAppNormalizeEmail_(row[0]);
+    if (!email) return;
+
+    const lastSeenDate = row[4] instanceof Date ? row[4] : new Date(row[4]);
+    const lastSeenMs = lastSeenDate && !isNaN(lastSeenDate.getTime())
+      ? lastSeenDate.getTime()
+      : 0;
+
+    const candidate = qaAppPresenceObject_(row, now - lastSeenMs <= onlineWindowMs);
+    candidate._lastSeenMs = lastSeenMs;
+
+    if (!latestByEmail[email] || latestByEmail[email]._lastSeenMs < lastSeenMs) {
+      latestByEmail[email] = candidate;
+    }
+  });
+
+  return Object.keys(latestByEmail).map(function(email) {
+    const item = latestByEmail[email];
+    delete item._lastSeenMs;
+    return item;
+  });
+}
+
+function qaAppRemovePresence_(ss, actorEmail, sessionId) {
+  const sheet = qaAppEnsurePresenceSheet_(ss);
+  if (sheet.getLastRow() < 2) return;
+
+  const email = qaAppNormalizeEmail_(actorEmail);
+  const cleanSessionId = qaAppCleanText_(sessionId);
+  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues();
+  const rowsToDelete = [];
+
+  values.forEach(function(row, index) {
+    const rowEmail = qaAppNormalizeEmail_(row[0]);
+    const rowSession = qaAppCleanText_(row[5]);
+    if (rowEmail === email && (!cleanSessionId || rowSession === cleanSessionId)) {
+      rowsToDelete.push(index + 2);
+    }
+  });
+
+  rowsToDelete.reverse().forEach(function(rowNumber) {
+    sheet.deleteRow(rowNumber);
+  });
+}
+
+function qaAppFindPresenceRow_(sheet, email, sessionId) {
+  if (sheet.getLastRow() < 2) return 0;
+
+  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues();
+  for (let i = 0; i < values.length; i++) {
+    if (
+      qaAppNormalizeEmail_(values[i][0]) === email &&
+      qaAppCleanText_(values[i][5]) === sessionId
+    ) {
+      return i + 2;
+    }
+  }
+  return 0;
+}
+
+function qaAppPresenceObject_(row, online) {
+  const lastSeen = row[4] instanceof Date ? row[4] : new Date(row[4]);
+  return {
+    email: qaAppNormalizeEmail_(row[0]),
+    displayName: qaAppCleanText_(row[1]),
+    role: qaAppCleanText_(row[2]),
+    currentPage: qaAppCleanText_(row[3]),
+    lastSeen: lastSeen && !isNaN(lastSeen.getTime()) ? lastSeen.toISOString() : "",
+    sessionId: qaAppCleanText_(row[5]),
+    online: Boolean(online)
+  };
+}
+
+function qaAppCleanupPresence_(sheet) {
+  if (sheet.getLastRow() < 2) return;
+
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const dates = sheet.getRange(2, 5, sheet.getLastRow() - 1, 1).getValues();
+  const rowsToDelete = [];
+
+  dates.forEach(function(row, index) {
+    const value = row[0] instanceof Date ? row[0] : new Date(row[0]);
+    if (!value || isNaN(value.getTime()) || value.getTime() < cutoff) {
+      rowsToDelete.push(index + 2);
+    }
+  });
+
+  rowsToDelete.reverse().forEach(function(rowNumber) {
+    sheet.deleteRow(rowNumber);
+  });
 }
 
 function qaAppFormatHeader_(sheet, columns) {
@@ -449,20 +626,58 @@ function qaAppFindUserRow_(sheet, email) {
 }
 
 function qaAppUpsertUser_(ss, rawUser, actorEmail) {
-  const email = qaAppNormalizeEmail_(rawUser.email);
+  const email = String(rawUser.email || "")
+    .toLowerCase()
+    .replace(/\u00A0/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, "")
+    .trim();
+
   const displayName = qaAppCleanText_(rawUser.displayName);
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid email address.");
-  if (!displayName) throw new Error("Enter the person’s name.");
 
-  const adminWhitelist = QA_APP_CONFIG.ADMIN_EMAILS.indexOf(email) >= 0;
-  let role = qaAppCleanText_(rawUser.role).toLowerCase();
-  if (["admin", "evaluator", "viewer"].indexOf(role) < 0) role = "evaluator";
+  const isBarbaraGmail =
+    email === "barbara.kalchik8reserve@gmail.com";
 
-  if (role === "admin" && !adminWhitelist) {
-    throw new Error("Only Junior and Barbara can be administrators.");
+  const isJunior =
+    email === "infojr.83@gmail.com";
+
+  const emailIsValid =
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+  if (!email || (!emailIsValid && !isBarbaraGmail)) {
+    throw new Error(
+      "Enter a valid email address. Received: " + email
+    );
   }
 
-  if (adminWhitelist) role = "admin";
+  if (!displayName) {
+    throw new Error("Enter the person’s name.");
+  }
+
+  const adminWhitelist =
+    isJunior ||
+    isBarbaraGmail ||
+    QA_APP_CONFIG.ADMIN_EMAILS.indexOf(email) >= 0;
+
+  let role = qaAppCleanText_(rawUser.role).toLowerCase();
+
+  if (
+    role !== "admin" &&
+    role !== "evaluator" &&
+    role !== "viewer"
+  ) {
+    role = "evaluator";
+  }
+
+  if (role === "admin" && !adminWhitelist) {
+    throw new Error(
+      "Only Junior and Barbara can be administrators."
+    );
+  }
+
+  if (adminWhitelist) {
+    role = "admin";
+  }
 
   const existing = qaAppGetUserByEmail_(ss, email);
   const requestedPermissions = rawUser.permissions || {};
@@ -474,16 +689,66 @@ function qaAppUpsertUser_(ss, rawUser, actorEmail) {
     displayName: displayName,
     role: role,
     active: isAdmin ? true : rawUser.active !== false,
-    guidedMode: isAdmin ? false : qaAppBoolean_(rawUser.guidedMode),
+    guidedMode: isAdmin
+      ? false
+      : qaAppBoolean_(rawUser.guidedMode),
+
     permissions: {
-      canSubmitReviews: isAdmin ? true : isViewer ? false : rawUser.permissions ? qaAppBoolean_(requestedPermissions.canSubmitReviews) : true,
-      canViewHistory: isAdmin ? true : rawUser.permissions ? qaAppBoolean_(requestedPermissions.canViewHistory) : true,
-      canEditAgentDetails: isAdmin ? true : isViewer ? false : rawUser.permissions ? qaAppBoolean_(requestedPermissions.canEditAgentDetails) : true,
-      canEditCriteriaSelections: isAdmin ? true : isViewer ? false : rawUser.permissions ? qaAppBoolean_(requestedPermissions.canEditCriteriaSelections) : true,
-      canEditCustomNotes: isAdmin ? true : isViewer ? false : rawUser.permissions ? qaAppBoolean_(requestedPermissions.canEditCustomNotes) : true
+      canSubmitReviews: isAdmin
+        ? true
+        : isViewer
+          ? false
+          : rawUser.permissions
+            ? qaAppBoolean_(
+                requestedPermissions.canSubmitReviews
+              )
+            : true,
+
+      canViewHistory: isAdmin
+        ? true
+        : rawUser.permissions
+          ? qaAppBoolean_(
+              requestedPermissions.canViewHistory
+            )
+          : true,
+
+      canEditAgentDetails: isAdmin
+        ? true
+        : isViewer
+          ? false
+          : rawUser.permissions
+            ? qaAppBoolean_(
+                requestedPermissions.canEditAgentDetails
+              )
+            : true,
+
+      canEditCriteriaSelections: isAdmin
+        ? true
+        : isViewer
+          ? false
+          : rawUser.permissions
+            ? qaAppBoolean_(
+                requestedPermissions.canEditCriteriaSelections
+              )
+            : true,
+
+      canEditCustomNotes: isAdmin
+        ? true
+        : isViewer
+          ? false
+          : rawUser.permissions
+            ? qaAppBoolean_(
+                requestedPermissions.canEditCustomNotes
+              )
+            : true
     },
+
     notes: qaAppCleanText_(rawUser.notes),
-    createdAt: existing && existing.createdAt ? new Date(existing.createdAt) : new Date()
+
+    createdAt:
+      existing && existing.createdAt
+        ? new Date(existing.createdAt)
+        : new Date()
   };
 
   return qaAppWriteUser_(ss, user, actorEmail);
@@ -644,10 +909,6 @@ function qaAppDefaultSettings_() {
 
 function qaAppSaveReview_(ss, actor, rawReview, actorName) {
   if (!actor.permissions.canSubmitReviews) throw new Error("Your account cannot submit QA reviews.");
-  const requestId = qaAppCleanText_(rawReview.requestId);
-  if (!requestId) throw new Error("The review request ID is missing. Refresh the app and try again.");
-  const existingRow = qaAppFindReviewByRequestId_(ss, requestId);
-  if (existingRow) return { success: true, message: "This review was already saved in row " + existingRow + ".", duplicate: true };
   if (!actor.permissions.canEditAgentDetails) {
     throw new Error("Your account cannot edit the agent and call details needed for a review.");
   }
@@ -749,7 +1010,6 @@ function qaAppSaveReview_(ss, actor, rawReview, actorName) {
   const kpiTarget = qaType === "Groups" ? Number(settings.rules.groupsKpi) : Number(settings.rules.csKpi);
   const result = finalScore >= kpiTarget ? "PASS" : "FAIL";
   const rowNumber = qaAppAppendReview_(ss, {
-    requestId: requestId,
     savedTimestamp: new Date(),
     agentStartDate: agentStartDate,
     todayDate: new Date(),
@@ -804,6 +1064,9 @@ function qaAppSaveReview_(ss, actor, rawReview, actorName) {
       kpiTarget: kpiTarget,
       result: result,
       markdowns: markdowns,
+      callLength: callLength,
+      callDate: qaAppDateOnlyIso_(callDate),
+      criteria: calculatedCriteria,
       issueSummary: calculatedCriteria
         .filter(function(item) { return item.customNote; })
         .map(function(item) { return item.name + " - " + item.status + " - " + item.customNote; })
@@ -857,7 +1120,6 @@ function qaAppAppendReview_(ss, review) {
     .map(function(value) { return qaAppCleanText_(value); });
   const valuesByHeader = {};
 
-  valuesByHeader["Request ID"] = review.requestId || "";
   valuesByHeader["Saved Timestamp"] = review.savedTimestamp;
   valuesByHeader["Agent Start Date"] = review.agentStartDate;
   valuesByHeader["Today's Date"] = review.todayDate;
@@ -941,7 +1203,6 @@ function qaAppFormatSavedReviewRow_(sheet, row, index) {
 
 function qaAppReviewHeaders_() {
   const headers = [
-    "Request ID",
     "Saved Timestamp",
     "Agent Start Date",
     "Today's Date",
@@ -1053,92 +1314,249 @@ function qaAppNormalizeQaType_(value) {
 }
 
 
-function qaAppFindReviewByRequestId_(ss, requestId) {
-  const sheet = qaAppEnsureReviewHeaders_(ss);
-  if (sheet.getLastRow() < 2) return 0;
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0].map(qaAppCleanText_);
-  const index = headers.indexOf("Request ID");
-  if (index < 0) return 0;
-  const values = sheet.getRange(2, index + 1, sheet.getLastRow() - 1, 1).getDisplayValues();
-  for (let i = 0; i < values.length; i++) if (qaAppCleanText_(values[i][0]) === requestId) return i + 2;
-  return 0;
-}
+// -----------------------------------------------------------------------------
+// CLEAN FILTERED EXCEL EXPORT
+// -----------------------------------------------------------------------------
 
-function qaAppEnsureEmailDetailsSheet_(ss) {
-  let sheet = ss.getSheetByName(QA_APP_CONFIG.EMAIL_DETAILS_SHEET_NAME);
-  if (!sheet) sheet = ss.insertSheet(QA_APP_CONFIG.EMAIL_DETAILS_SHEET_NAME);
-  const headers = ["Timestamp", "Review Row", "Review ID", "Agent Name", "Call Center", "Evaluator", "Call ID", "Itinerary Number", "Email Sent", "Updated By Email", "Updated By Name"];
-  if (sheet.getLastRow() === 0 || !sheet.getRange(1,1).getValue()) sheet.getRange(1,1,1,headers.length).setValues([headers]);
-  qaAppFormatHeader_(sheet, headers.length);
-  sheet.setFrozenRows(1);
-  return sheet;
-}
+function qaAppExportFilteredReviews_(ss, actor, rawFilters) {
+  if (!(actor.role === "admin" || actor.permissions.canViewHistory)) {
+    throw new Error("Your account cannot export review history.");
+  }
 
-function qaAppMarkEmailSent_(ss, actor, request) {
-  if (actor.role === "viewer") throw new Error("Viewer accounts cannot change email status.");
-  const rowNumber = Number(request.rowNumber);
-  if (!rowNumber || rowNumber < 2) throw new Error("A valid Agents Reviewed row is required.");
-  const sheet = qaAppEnsureReviewHeaders_(ss);
-  if (rowNumber > sheet.getLastRow()) throw new Error("That review row was not found.");
-  const headers = sheet.getRange(1,1,1,sheet.getLastColumn()).getDisplayValues()[0].map(qaAppCleanText_);
-  const index = qaAppHeaderIndex_(headers);
-  if (index["Email Sent?"] === undefined) throw new Error("Email Sent? column was not found.");
-  const sent = qaAppBoolean_(request.sent);
-  sheet.getRange(rowNumber, index["Email Sent?"] + 1).insertCheckboxes().setValue(sent);
-  const row = sheet.getRange(rowNumber,1,1,sheet.getLastColumn()).getDisplayValues()[0];
-  const get = function(name) { return index[name] === undefined ? "" : row[index[name]]; };
-  const details = qaAppEnsureEmailDetailsSheet_(ss);
-  details.appendRow([new Date(), rowNumber, request.reviewId || "", get("Agent Name"), get("Call Center"), get("Evaluator"), get("Call ID"), get("Itinerary Number"), sent, actor.email, actor.displayName]);
-  details.getRange(details.getLastRow(),1).setNumberFormat("m/d/yyyy h:mm AM/PM");
-  qaAppAudit_(ss, sent ? "EMAIL MARKED SENT" : "EMAIL MARKED NOT SENT", actor.email, "", { rowNumber: rowNumber });
-  try { CacheService.getScriptCache().remove(QA_APP_CONFIG.CACHE_KEY); } catch (error) {}
-  return { success: true, message: "Email status saved and logged in Emails Sent Details." };
-}
-
-function qaAppExportReviews_(ss) {
   const source = qaAppEnsureReviewHeaders_(ss);
-  const temp = SpreadsheetApp.create("QA Reviews Export " + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HHmmss"));
-  const target = temp.getSheets()[0];
-  target.setName(QA_APP_CONFIG.REVIEW_SHEET_NAME);
-  const range = source.getDataRange();
-  const values = range.getValues();
-  target.getRange(1, 1, values.length, values[0].length).setValues(values);
-  target.setFrozenRows(1);
+  const lastRow = source.getLastRow();
+  const lastColumn = source.getLastColumn();
+  if (lastRow < 2) throw new Error("There are no saved reviews to export.");
+
+  const values = source.getRange(1, 1, lastRow, lastColumn).getValues();
+  const display = source.getRange(1, 1, lastRow, lastColumn).getDisplayValues();
+  const headers = display[0].map(function(value) { return qaAppCleanText_(value); });
+  const index = qaAppHeaderIndex_(headers);
+  const filters = qaAppNormalizeExportFilters_(rawFilters);
+  const reviews = [];
+
+  for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
+    const rowValues = values[rowIndex];
+    const rowDisplay = display[rowIndex];
+    const review = qaAppExportReviewFromRow_(rowValues, rowDisplay, index, rowIndex + 1);
+    if (!review.agentName) continue;
+    if (!qaAppReviewMatchesExportFilters_(review, filters)) continue;
+    reviews.push(review);
+  }
+
+  if (!reviews.length) throw new Error("No reviews match the selected filters.");
+
+  const temp = SpreadsheetApp.create("QA Filtered Reviews Export " + new Date().getTime());
+  const output = temp.getSheets()[0];
+  output.setName("Reviews");
+  output.clear();
+  output.setHiddenGridlines(true);
+  output.setFrozenRows(2);
+
+  const purple = "#24165f";
+  const lavender = "#ede9fe";
+  const lightGray = "#f3f4f6";
+  const green = "#d9ead3";
+  const red = "#f4cccc";
+  const amber = "#fff2cc";
+  const border = "#c9c4d8";
+
+  output.getRange("A1:F1").merge()
+    .setValue(qaAppExportTitle_(filters))
+    .setFontSize(16).setFontWeight("bold").setFontColor("#ffffff")
+    .setBackground(purple).setHorizontalAlignment("center")
+    .setVerticalAlignment("middle");
+  output.setRowHeight(1, 34);
+  output.getRange("A2:F2").merge()
+    .setValue("Generated " + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "MM/dd/yyyy h:mm a") + " • " + reviews.length + " review" + (reviews.length === 1 ? "" : "s"))
+    .setFontColor("#4b5563").setHorizontalAlignment("center");
+
+  let row = 4;
+  reviews.forEach(function(review, reviewIndex) {
+    output.getRange(row, 1, 1, 6).merge()
+      .setValue("Review " + (reviewIndex + 1) + " — " + review.agentName)
+      .setBackground(purple).setFontColor("#ffffff")
+      .setFontWeight("bold").setFontSize(12);
+    row += 1;
+
+    const meta = [
+      ["Call Center", review.callCenter, "Evaluator", review.evaluator, "Review Date", review.reviewDate],
+      ["Final Score", review.finalScore + "%", "Result", review.result, "QA Type", review.qaType],
+      ["Call Length", review.callLength || "", "Call Date", review.callDate || "", "Itinerary", review.itineraryNumber || ""],
+      ["Call ID", review.callId || "", "Agent Start Date", review.agentStartDate || "", "Email Sent", review.emailSent ? "Yes" : "No"]
+    ];
+    output.getRange(row, 1, meta.length, 6).setValues(meta).setWrap(true).setVerticalAlignment("middle");
+    [1,3,5].forEach(function(column) {
+      output.getRange(row, column, meta.length, 1).setFontWeight("bold").setBackground(lavender);
+    });
+    output.getRange(row, 1, meta.length, 6).setBorder(true, true, true, true, true, true, border, SpreadsheetApp.BorderStyle.SOLID);
+    const resultCell = output.getRange(row + 1, 4);
+    resultCell.setBackground(review.result === "PASS" ? green : red).setFontWeight("bold");
+    row += meta.length + 1;
+
+    output.getRange(row, 1, 1, 6).setValues([["#", "Criterion", "Max", "Score", "Status", "Notes"]])
+      .setBackground("#4c3b87").setFontColor("#ffffff").setFontWeight("bold")
+      .setHorizontalAlignment("center").setVerticalAlignment("middle");
+    row += 1;
+
+    const criteria = review.criteria.filter(function(item) { return item.name || item.status || item.customNote; });
+    const criteriaRows = criteria.map(function(item) {
+      return [item.number, item.name, item.points, item.autoPoints, item.status, item.customNote || ""];
+    });
+    if (criteriaRows.length) {
+      output.getRange(row, 1, criteriaRows.length, 6).setValues(criteriaRows).setWrap(true).setVerticalAlignment("top");
+      output.getRange(row, 1, criteriaRows.length, 6).setBorder(true, true, true, true, true, true, border, SpreadsheetApp.BorderStyle.SOLID);
+      criteria.forEach(function(item, idx) {
+        const statusCell = output.getRange(row + idx, 5);
+        if (item.status === "✕ Markdown") statusCell.setBackground(red);
+        else if (item.status === "Partial") statusCell.setBackground(amber);
+        else if (item.status === "✓ Followed") statusCell.setBackground(green);
+        else statusCell.setBackground(lightGray);
+      });
+      row += criteriaRows.length;
+    }
+
+    output.getRange(row, 1).setValue("Review Notes").setFontWeight("bold").setBackground(lavender);
+    output.getRange(row, 2, 1, 5).merge().setValue(review.issueSummary || "No review notes.").setWrap(true);
+    output.getRange(row, 1, 1, 6).setBorder(true, true, true, true, true, true, border, SpreadsheetApp.BorderStyle.SOLID);
+    row += 2;
+  });
+
+  output.setColumnWidth(1, 55);
+  output.setColumnWidth(2, 310);
+  output.setColumnWidth(3, 70);
+  output.setColumnWidth(4, 75);
+  output.setColumnWidth(5, 120);
+  output.setColumnWidth(6, 390);
+  output.getRange(1, 1, Math.max(1, row), 6).setFontFamily("Arial");
+  output.autoResizeRows(1, Math.max(1, row));
   SpreadsheetApp.flush();
-  const url = "https://www.googleapis.com/drive/v3/files/" + temp.getId() + "/export?mimeType=" + encodeURIComponent("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  const response = UrlFetchApp.fetch(url, { headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() } });
+
+  const exportUrl = "https://docs.google.com/spreadsheets/d/" + temp.getId() + "/export?format=xlsx";
+  const response = UrlFetchApp.fetch(exportUrl, {
+    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) {
+    DriveApp.getFileById(temp.getId()).setTrashed(true);
+    throw new Error("Google could not create the Excel file. HTTP " + response.getResponseCode() + ".");
+  }
+
+  const filename = qaAppExportFilename_(filters, reviews);
+  const base64 = Utilities.base64Encode(response.getBlob().getBytes());
   DriveApp.getFileById(temp.getId()).setTrashed(true);
-  return { filename: "Agents-Reviewed-" + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd") + ".xlsx", base64: Utilities.base64Encode(response.getBlob().getBytes()) };
+  return { filename: filename, base64: base64 };
 }
 
-function qaAppBackupSheetNames_() {
-  return [QA_APP_CONFIG.REVIEW_SHEET_NAME, QA_APP_CONFIG.USERS_SHEET_NAME, QA_APP_CONFIG.SETTINGS_SHEET_NAME, QA_APP_CONFIG.AUDIT_SHEET_NAME, QA_APP_CONFIG.EMAIL_DETAILS_SHEET_NAME];
+function qaAppNormalizeExportFilters_(raw) {
+  return {
+    search: qaAppCleanText_(raw.search).toLowerCase(),
+    result: qaAppCleanText_(raw.result || "ALL").toUpperCase(),
+    center: qaAppCleanText_(raw.center || "ALL"),
+    qaType: qaAppCleanText_(raw.qaType || "ALL"),
+    evaluator: qaAppCleanText_(raw.evaluator || "ALL"),
+    emailStatus: qaAppCleanText_(raw.emailStatus || "ALL").toUpperCase(),
+    dateFrom: qaAppCleanText_(raw.dateFrom),
+    dateTo: qaAppCleanText_(raw.dateTo)
+  };
 }
 
-function qaAppCreateBackup_(ss, actorEmail) {
-  const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd-HHmmss");
-  qaAppBackupSheetNames_().forEach(function(name) {
-    const source = ss.getSheetByName(name);
-    if (!source) return;
-    const copy = source.copyTo(ss).setName(QA_APP_CONFIG.BACKUP_PREFIX + " " + stamp + " - " + name);
-    copy.hideSheet();
-  });
-  PropertiesService.getScriptProperties().setProperty("QA_LATEST_BACKUP_STAMP", stamp);
-  qaAppAudit_(ss, "BACKUP CREATED", actorEmail, "", { stamp: stamp });
-  return "Backup " + stamp + " was created successfully.";
+function qaAppExportReviewFromRow_(rowValues, rowDisplay, index, rowNumber) {
+  function val(header) {
+    return index[header] === undefined ? "" : rowValues[index[header]];
+  }
+  function text(header) {
+    return index[header] === undefined ? "" : qaAppCleanText_(rowDisplay[index[header]]);
+  }
+  const qaType = text("QA Type") || "CS";
+  const score = Number(val("Final Score")) || 0;
+  const kpi = Number(val("KPI Target")) || (qaType === "Groups" ? 85 : 90);
+  const criteria = [];
+  for (let i = 1; i <= 9; i++) {
+    criteria.push({
+      number: text("Criteria " + i + " #") || i,
+      name: text("Criteria " + i + " Name"),
+      points: val("Criteria " + i + " Max Points") === "" ? "" : Number(val("Criteria " + i + " Max Points")),
+      status: text("Criteria " + i + " Status"),
+      partialPoints: val("Criteria " + i + " Partial Points") === "" ? "" : Number(val("Criteria " + i + " Partial Points")),
+      autoPoints: val("Criteria " + i + " Auto Points") === "" ? "" : Number(val("Criteria " + i + " Auto Points")),
+      notes: text("Criteria " + i + " Notes / Issue Found"),
+      customNote: text("Custom Note " + i)
+    });
+  }
+  const notes = criteria.filter(function(item) { return item.customNote; }).map(function(item) {
+    return item.name + " — " + item.status + ": " + item.customNote;
+  }).join("\n");
+  return {
+    rowNumber: rowNumber,
+    reviewDate: qaAppExportDateText_(val("Today's Date") || val("Saved Timestamp")),
+    savedDate: qaAppExportDateIso_(val("Today's Date") || val("Saved Timestamp")),
+    agentStartDate: qaAppExportDateText_(val("Agent Start Date")),
+    evaluator: text("Evaluator"),
+    agentName: text("Agent Name"),
+    callCenter: text("Call Center"),
+    callId: text("Call ID"),
+    itineraryNumber: text("Itinerary Number"),
+    emailSent: qaAppBoolean_(val("Email Sent?")),
+    qaType: qaType,
+    finalScore: score,
+    kpiTarget: kpi,
+    result: text("Result") || (score >= kpi ? "PASS" : "FAIL"),
+    callLength: text("Length of Call"),
+    callDate: qaAppExportDateText_(val("Date of Call")),
+    criteria: criteria,
+    issueSummary: notes
+  };
 }
 
-function qaAppRestoreLatestBackup_(ss, actorEmail) {
-  const stamp = String(PropertiesService.getScriptProperties().getProperty("QA_LATEST_BACKUP_STAMP") || "").trim();
-  if (!stamp) throw new Error("No QA backup is available yet.");
-  qaAppBackupSheetNames_().forEach(function(name) {
-    const backup = ss.getSheetByName(QA_APP_CONFIG.BACKUP_PREFIX + " " + stamp + " - " + name);
-    if (!backup) return;
-    let target = ss.getSheetByName(name);
-    if (!target) target = ss.insertSheet(name);
-    target.clear();
-    backup.getDataRange().copyTo(target.getRange(1,1), SpreadsheetApp.CopyPasteType.PASTE_NORMAL, false);
-  });
-  qaAppAudit_(ss, "BACKUP RESTORED", actorEmail, "", { stamp: stamp });
-  return "Backup " + stamp + " was restored.";
+function qaAppReviewMatchesExportFilters_(review, filters) {
+  if (filters.result !== "ALL" && review.result.toUpperCase() !== filters.result) return false;
+  if (filters.center !== "ALL" && review.callCenter !== filters.center) return false;
+  if (filters.qaType !== "ALL" && review.qaType !== filters.qaType) return false;
+  if (filters.evaluator !== "ALL" && review.evaluator !== filters.evaluator) return false;
+  if (filters.emailStatus === "SENT" && !review.emailSent) return false;
+  if (filters.emailStatus === "NOT_SENT" && review.emailSent) return false;
+  if (filters.dateFrom && review.savedDate < filters.dateFrom) return false;
+  if (filters.dateTo && review.savedDate > filters.dateTo) return false;
+  if (filters.search) {
+    const haystack = [review.agentName, review.callCenter, review.callId, review.itineraryNumber, review.evaluator].join(" ").toLowerCase();
+    if (haystack.indexOf(filters.search) < 0) return false;
+  }
+  return true;
+}
+
+function qaAppExportDateIso_(value) {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(value);
+  if (isNaN(date.getTime())) return qaAppCleanText_(value).slice(0, 10);
+  return Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd");
+}
+
+function qaAppExportDateText_(value) {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(value);
+  if (isNaN(date.getTime())) return qaAppCleanText_(value);
+  return Utilities.formatDate(date, Session.getScriptTimeZone(), "MM/dd/yyyy");
+}
+
+function qaAppExportTitle_(filters) {
+  return filters.center !== "ALL" ? qaAppTitleCase_(filters.center) + " Reviews" : "QA Reviews";
+}
+
+function qaAppExportFilename_(filters, reviews) {
+  const prefix = filters.center !== "ALL" ? qaAppTitleCase_(filters.center) + " Reviews" : "Reviews";
+  let datePart = "";
+  if (filters.dateFrom && filters.dateTo) {
+    datePart = filters.dateFrom === filters.dateTo ? filters.dateFrom : filters.dateFrom + " to " + filters.dateTo;
+  } else if (filters.dateFrom) datePart = "From " + filters.dateFrom;
+  else if (filters.dateTo) datePart = "Through " + filters.dateTo;
+  else {
+    const dates = reviews.map(function(r) { return r.savedDate; }).filter(Boolean).sort();
+    datePart = dates.length ? (dates[0] === dates[dates.length - 1] ? dates[0] : dates[0] + " to " + dates[dates.length - 1]) : Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  return (prefix + " " + datePart + ".xlsx").replace(/[\\/:*?"<>|]/g, "-");
+}
+
+function qaAppTitleCase_(value) {
+  return String(value || "").toLowerCase().replace(/(^|[\s-])\S/g, function(letter) { return letter.toUpperCase(); });
 }

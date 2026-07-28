@@ -2,6 +2,7 @@ import http from 'node:http'
 import { OAuth2Client } from 'google-auth-library'
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { createVerify } from 'node:crypto'
 
 function loadEnvFile() {
   const envPath = resolve(process.cwd(), '.env')
@@ -43,6 +44,39 @@ function getBearerToken(req) {
   return match ? match[1].trim() : ''
 }
 
+function decodeJwtPart(value) {
+  return JSON.parse(Buffer.from(String(value).replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'))
+}
+
+async function verifySignedGoogleTokenWithWorkdayGrace(idToken, googleClientId) {
+  const parts = String(idToken || '').split('.')
+  if (parts.length !== 3) throw new Error('Google returned an invalid sign-in token.')
+  const header = decodeJwtPart(parts[0])
+  const payload = decodeJwtPart(parts[1])
+  if (!header.kid || header.alg !== 'RS256') throw new Error('Google returned an invalid token header.')
+
+  const client = new OAuth2Client(googleClientId)
+  const certificateResult = await client.getFederatedSignonCertsAsync()
+  const certificate = certificateResult?.certs?.[header.kid]
+  if (!certificate) throw new Error('Google token certificate was not found.')
+
+  const verifier = createVerify('RSA-SHA256')
+  verifier.update(`${parts[0]}.${parts[1]}`)
+  verifier.end()
+  const signature = Buffer.from(parts[2].replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+  if (!verifier.verify(certificate, signature)) throw new Error('Google token signature is invalid.')
+
+  const audience = Array.isArray(payload.aud) ? payload.aud : [payload.aud]
+  if (!['accounts.google.com', 'https://accounts.google.com'].includes(String(payload.iss || ''))) throw new Error('Google token issuer is invalid.')
+  if (!audience.includes(googleClientId)) throw new Error('Google token audience is invalid.')
+  if (!payload.email || payload.email_verified !== true) throw new Error('Google did not verify this email address.')
+
+  const issuedAt = Number(payload.iat || 0)
+  const now = Math.floor(Date.now() / 1000)
+  if (!issuedAt || issuedAt > now + 300 || now - issuedAt > 24 * 60 * 60) throw new Error('Please sign in with Google again.')
+  return payload
+}
+
 async function verifyIdentity(req) {
   const googleClientId = String(process.env.GOOGLE_CLIENT_ID || '').trim()
   const idToken = getBearerToken(req)
@@ -50,8 +84,15 @@ async function verifyIdentity(req) {
   if (idToken) {
     if (!googleClientId) throw new Error('GOOGLE_CLIENT_ID is not configured in .env.')
     const client = new OAuth2Client(googleClientId)
-    const ticket = await client.verifyIdToken({ idToken, audience: googleClientId })
-    const payload = ticket.getPayload()
+    let payload
+    try {
+      const ticket = await client.verifyIdToken({ idToken, audience: googleClientId })
+      payload = ticket.getPayload()
+    } catch (error) {
+      const message = error instanceof Error ? error.message.toLowerCase() : ''
+      if (!message.includes('expired') && !message.includes('used too late')) throw error
+      payload = await verifySignedGoogleTokenWithWorkdayGrace(idToken, googleClientId)
+    }
     if (!payload?.email || !payload.email_verified) throw new Error('Google did not verify this email address.')
     return {
       email: payload.email.toLowerCase(),

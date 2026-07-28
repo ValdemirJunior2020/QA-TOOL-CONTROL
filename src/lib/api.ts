@@ -420,8 +420,20 @@ export async function markReviewEmailSent(
   )
 }
 
+export interface ReviewExportFilters {
+  search: string
+  result: string
+  center: string
+  qaType: string
+  evaluator: string
+  emailStatus: string
+  dateFrom: string
+  dateTo: string
+}
+
 export async function exportReviewsWorkbook(
   session: AuthSession,
+  filters: ReviewExportFilters,
 ): Promise<{
   filename: string
   base64: string
@@ -433,14 +445,15 @@ export async function exportReviewsWorkbook(
     }>
   >(
     session,
-    'exportReviews',
+    'exportFilteredReviews',
+    { filters },
   )
 
   if (!response.success || !response.data) {
     throw new QaApiError(
       response.message
         ? getFriendlyApiError(new Error(response.message))
-        : 'The review workbook could not be created. Please try again.',
+        : 'The filtered review workbook could not be created. Please try again.',
       'REQUEST_FAILED',
     )
   }
