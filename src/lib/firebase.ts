@@ -1,5 +1,5 @@
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyC7Y-LT6hBF9uhv2Fj-J74KencZQvOiwJg',
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyC7Y-LT6hBF9uhv2Fj-J74KencZqvOiwJg',
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'psych-support-app.firebaseapp.com',
   databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL || 'https://psych-support-app-default-rtdb.firebaseio.com',
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'psych-support-app',
