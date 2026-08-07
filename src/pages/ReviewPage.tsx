@@ -144,7 +144,20 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
       ...current,
       criteria: current.criteria.map((criterion, criterionIndex) => {
         if (criterionIndex !== index) return criterion
+
         const updated = { ...criterion, ...patch }
+
+        // Notes are only used for Markdown or Partial.
+        // If the evaluator changes the status to Followed, N/A, or blank,
+        // clear any old note so it can't accidentally be saved.
+        if (
+          patch.status !== undefined &&
+          patch.status !== '✕ Markdown' &&
+          patch.status !== 'Partial'
+        ) {
+          updated.customNote = ''
+        }
+
         updated.partialPoints = updated.points / 2
         updated.autoPoints = pointsForStatus(updated.points, updated.status)
         return updated
@@ -154,7 +167,18 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
     setValidation((current) => {
       const next = { ...current.fieldErrors }
       delete next[`criterion-${index}`]
-      if (patch.customNote) delete next[`note-${index}`]
+
+      // Clear any note error as soon as the status no longer requires a note,
+      // or as soon as the evaluator starts typing a note.
+      if (
+        patch.customNote !== undefined ||
+        (patch.status !== undefined &&
+          patch.status !== '✕ Markdown' &&
+          patch.status !== 'Partial')
+      ) {
+        delete next[`note-${index}`]
+      }
+
       return { errors: current.errors, fieldErrors: next }
     })
   }
@@ -243,7 +267,7 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
           <div className="guided-progress-grid">
             <span className={review.agentName && review.callCenter && review.callId ? 'complete' : ''}>Call details {review.agentName && review.callCenter && review.callId ? '✓' : '○'}</span>
             <span className={review.criteria.every((item) => item.status) ? 'complete' : ''}>Criteria selected {review.criteria.every((item) => item.status) ? '✓' : '○'}</span>
-            <span className={review.criteria.every((item) => !['✕ Markdown', 'Partial'].includes(item.status) || item.customNote.trim()) ? 'complete' : ''}>Required notes {review.criteria.every((item) => !['✕ Markdown', 'Partial'].includes(item.status) || item.customNote.trim()) ? '✓' : '○'}</span>
+            <span className={review.criteria.every((item) => !['✕ Markdown', 'Partial'].includes(item.status) || item.customNote.trim()) ? 'complete' : ''}>Markdown / Partial notes {review.criteria.every((item) => !['✕ Markdown', 'Partial'].includes(item.status) || item.customNote.trim()) ? '✓' : '○'}</span>
             <span className={validation.errors.length === 0 ? 'complete' : ''}>Ready to save {validation.errors.length === 0 ? '✓' : '○'}</span>
           </div>
         </section>
@@ -412,13 +436,21 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
                   <td data-label="Auto Points"><strong>{criterion.autoPoints || (criterion.status ? 0 : '')}</strong></td>
                   <td data-label="Notes / Issue Found"><p>{criterion.notes}</p></td>
                   <td data-label="Custom Notes" className={validation.fieldErrors[`note-${index}`] ? 'cell-invalid' : ''}>
-                    <textarea
-                      value={criterion.customNote}
-                      onChange={(event) => updateCriterion(index, { customNote: event.target.value })}
-                      placeholder={criterion.status === '✕ Markdown' || criterion.status === 'Partial' ? 'Explain the issue clearly…' : 'Optional note'}
-                      disabled={!user.permissions.canEditCustomNotes}
-                    />
-                    {validation.fieldErrors[`note-${index}`] && <small>{validation.fieldErrors[`note-${index}`]}</small>}
+                    {criterion.status === '✕ Markdown' || criterion.status === 'Partial' ? (
+                      <>
+                        <textarea
+                          value={criterion.customNote}
+                          onChange={(event) => updateCriterion(index, { customNote: event.target.value })}
+                          placeholder="Required: explain the issue clearly…"
+                          disabled={!user.permissions.canEditCustomNotes}
+                        />
+                        {validation.fieldErrors[`note-${index}`] && <small>{validation.fieldErrors[`note-${index}`]}</small>}
+                      </>
+                    ) : criterion.status ? (
+                      <span className="note-not-required">No note required.</span>
+                    ) : (
+                      <span className="note-not-required">Select a status first.</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -446,7 +478,7 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
               <label><input type="checkbox" required /> The Call ID belongs to this exact call.</label>
               <label><input type="checkbox" required /> The booking reference belongs to this guest.</label>
               <label><input type="checkbox" required /> The call center, QA type, call length, and call date are correct.</label>
-              <label><input type="checkbox" required /> Every criterion status and required note was checked.</label>
+              <label><input type="checkbox" required /> Every criterion status was checked, and notes were added only where Markdown or Partial requires them.</label>
             </div>
             <p className="kind-note">Take your time. This extra check is here to help prevent small mistakes.</p>
             <div className="modal-actions">
