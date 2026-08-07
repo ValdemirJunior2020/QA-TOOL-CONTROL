@@ -1,12 +1,11 @@
-WINDOWS LOCAL START
+WINDOWS LOCAL START — FIREBASE VERSION
 
 1. Open PowerShell in this folder.
 2. Run: npm install
 3. Run: npm run dev
 4. Open: http://localhost:5173
 
-The app starts two normal Node processes:
-- React/Vite: http://localhost:5173
-- Local API:   http://localhost:8787
+Only the React/Vite dev server runs locally.
+There is no local Node API and no Netlify Function.
 
-Netlify CLI and Deno are not used for local development.
+For Google login on localhost, localhost must be allowed by Firebase Authentication. Firebase normally includes localhost for development projects; verify it under Authentication -> Settings -> Authorized domains if sign-in is blocked.

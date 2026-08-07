@@ -11,6 +11,7 @@ interface AdminPageProps {
   onSaveUser: (user: QaUser) => Promise<void>
   onSetBlocked: (email: string, blocked: boolean) => Promise<void>
   onSaveSettings: (settings: AppSettings) => Promise<void>
+  onImportLegacyWorkbook: (file: File) => Promise<unknown>
   busy: boolean
 }
 
@@ -41,12 +42,15 @@ export function AdminPage({
   onSaveUser,
   onSetBlocked,
   onSaveSettings,
+  onImportLegacyWorkbook,
   busy,
 }: AdminPageProps) {
   const [section, setSection] = useState<'team' | 'criteria' | 'rules'>('team')
   const [editingUser, setEditingUser] = useState<QaUser | null>(null)
   const [draftSettings, setDraftSettings] = useState<AppSettings>(() => structuredClone(settings))
   const [newCenter, setNewCenter] = useState('')
+  const [legacyFile, setLegacyFile] = useState<File | null>(null)
+  const [migrationMessage, setMigrationMessage] = useState('')
 
   const visibleUsers = useMemo(() => {
     const seen = new Set<string>()
@@ -118,6 +122,19 @@ export function AdminPage({
     await onSaveSettings(draftSettings)
   }
 
+  const importLegacy = async () => {
+    if (!legacyFile || busy) return
+    if (!window.confirm(`Import ${legacyFile.name} into Firebase? Existing documents with the same Request ID / legacy row ID will be updated, not duplicated.`)) return
+    setMigrationMessage('')
+    try {
+      await onImportLegacyWorkbook(legacyFile)
+      setMigrationMessage('Legacy workbook imported successfully. Firebase is now the live database.')
+      setLegacyFile(null)
+    } catch (error) {
+      setMigrationMessage(error instanceof Error ? error.message : 'Legacy workbook import failed.')
+    }
+  }
+
   return (
     <div className="page-stack">
       <section className="admin-intro">
@@ -185,12 +202,20 @@ export function AdminPage({
                     <button
                       type="button"
                       className="secondary-button compact"
-                      onClick={() => setEditingUser(structuredClone(user))}
-                      disabled={!canManageTarget}
-                      title={!canManageTarget ? 'Only Junior can edit another administrator.' : undefined}
+                      onClick={() => {
+                        if (!canManageTarget) {
+                          window.alert("Junior is the owner account. Barbara can't edit, block, delete, demote, or change Junior's permissions.")
+                          return
+                        }
+                        setEditingUser(structuredClone(user))
+                      }}
+                      title={!canManageTarget ? 'Junior is protected as the owner account.' : undefined}
                     >
-                      Edit
+                      {canManageTarget ? 'Edit' : 'Protected Owner'}
                     </button>
+                    {!canBlockTarget && isTargetSuperAdmin && !isSuperAdmin && (
+                      <button type="button" className="secondary-button compact" onClick={() => window.alert("Junior is the owner account. Barbara can't block, delete, disable, or destroy Junior's access.")}>Protected</button>
+                    )}
                     {canBlockTarget && (
                       <button
                         type="button"
@@ -206,6 +231,28 @@ export function AdminPage({
               )
             })}
           </div>
+        </section>
+      )}
+
+      {section === 'team' && isSuperAdmin && (
+        <section className="panel firebase-migration-panel">
+          <div className="panel-heading wrap-heading">
+            <div>
+              <p className="eyebrow">One-time Firebase migration</p>
+              <h2>Import the legacy QA Google Sheet workbook</h2>
+              <p className="muted">Junior only. This imports Agents Reviewed, evaluator access, QA settings, all criteria, notes, call IDs, itinerary numbers, email status, dates, scores, and legacy row numbers. It can safely be re-run because legacy rows use stable IDs.</p>
+            </div>
+          </div>
+          <div className="migration-controls">
+            <label className="field">
+              <span>Legacy QA Excel workbook</span>
+              <input type="file" accept=".xlsx" disabled={busy} onChange={(event) => setLegacyFile(event.target.files?.[0] || null)} />
+            </label>
+            <button type="button" className="primary-button" disabled={!legacyFile || busy} onClick={() => void importLegacy()}>
+              {busy ? 'Importing…' : 'Import Workbook to Firebase'}
+            </button>
+          </div>
+          {migrationMessage && <p className="muted">{migrationMessage}</p>}
         </section>
       )}
 

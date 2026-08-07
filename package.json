@@ -4,16 +4,14 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node server/dev-runner.mjs",
+    "dev": "vite",
     "dev:vite": "vite",
     "build": "tsc -b && vite build",
     "check": "tsc -b --pretty false",
-    "preview": "vite preview",
-    "dev:netlify": "netlify dev"
+    "preview": "vite preview"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
-    "google-auth-library": "^10.3.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

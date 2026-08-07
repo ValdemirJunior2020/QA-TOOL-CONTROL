@@ -1,11 +1,19 @@
 # Security and Access
 
-The browser never receives the Apps Script URL, Apps Script API key, or React API proxy secret. Those values belong only in the Netlify environment.
+The production app uses Firebase Authentication, Cloud Firestore, and Firebase Realtime Database directly from the React/Vite browser app. There is no Netlify Function, live Apps Script API, proxy secret, or Node API.
 
-Google Sign-In returns an ID token to the browser. The Netlify Function verifies that token against the configured Google OAuth client ID before forwarding any request.
+Firebase web configuration is not a server secret. Authorization is enforced by `firestore.rules` and `database.rules.json`, not by hiding the Firebase configuration.
 
-The Apps Script API checks the verified email against `QA App Users`. Only the hard-coded Junior and Barbara email addresses may hold the administrator role. Administrator accounts cannot be blocked from the app screen.
+## Access model
 
-Every write request must include the private `QA_APP_PROXY_SECRET` created by `qaAppSetup()`. Apps Script also validates review fields, permissions, Guided Mode Call ID rules, scoring selections, and required custom notes before appending a row.
+- Any verified Google account can sign in and read the normal QA review data.
+- Unknown accounts are viewers. They cannot submit reviews or access Admin Control.
+- Review creation requires an active user document with evaluator/admin role and `canSubmitReviews=true`, except the protected Junior owner account.
+- Admin writes are limited to Junior and an active Barbara admin account.
+- Junior (`infojr.83@gmail.com`) is hard-protected in Firestore rules.
+- Barbara cannot update, block, demote, delete, or change Junior's account.
+- Junior can change Barbara's permissions/role/access.
+- Review deletion is owner-only.
+- Normal review records cannot be arbitrarily edited after creation; admin review updates are limited to Email Sent metadata.
 
-Set `ALLOW_DEV_BYPASS=false` in Netlify production. The local test-login headers are accepted only by Netlify Dev when that flag is explicitly enabled.
+Do not replace the included Firebase rules with open public read/write rules.

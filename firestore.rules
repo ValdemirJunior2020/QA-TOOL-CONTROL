@@ -1,0 +1,86 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null && request.auth.token.email != null && request.auth.token.email_verified == true;
+    }
+    function email() {
+      return request.auth.token.email;
+    }
+    function isOwner() {
+      return signedIn() && email() == 'infojr.83@gmail.com';
+    }
+    function barbaraAccess() {
+      return get(/databases/$(database)/documents/users/barbara.kalchik8reserve@gmail.com).data;
+    }
+    function isBarbaraAdmin() {
+      return signedIn()
+        && email() == 'barbara.kalchik8reserve@gmail.com'
+        && barbaraAccess().role == 'admin'
+        && barbaraAccess().active == true;
+    }
+    function isAdmin() {
+      return isOwner() || isBarbaraAdmin();
+    }
+    function ownAccess() {
+      return get(/databases/$(database)/documents/users/$(email())).data;
+    }
+    function canSubmit() {
+      return isOwner() || (
+        signedIn()
+        && ownAccess().active == true
+        && (ownAccess().role == 'evaluator' || ownAccess().role == 'admin')
+        && ownAccess().permissions.canSubmitReviews == true
+      );
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if signedIn();
+      allow create: if canSubmit();
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['emailSent', 'emailSentAt', 'emailSentBy', 'updatedAt']);
+      allow delete: if isOwner();
+    }
+
+    match /users/{userEmail} {
+      allow get: if signedIn() && (email() == userEmail || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isOwner() || (
+        isBarbaraAdmin()
+        && userEmail != 'infojr.83@gmail.com'
+        && request.resource.data.email == userEmail
+        && (
+          (userEmail == 'barbara.kalchik8reserve@gmail.com'
+            && request.resource.data.role == 'admin'
+            && request.resource.data.active == true)
+          ||
+          (userEmail != 'barbara.kalchik8reserve@gmail.com'
+            && request.resource.data.role != 'admin')
+        )
+      );
+      allow delete: if isOwner() && userEmail != 'infojr.83@gmail.com';
+    }
+
+    match /settings/{settingId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /meta/{metaId} {
+      allow read: if signedIn();
+      allow create, update: if canSubmit();
+      allow delete: if isOwner();
+    }
+
+    match /auditLogs/{auditId} {
+      allow read: if isAdmin();
+      allow create: if signedIn() && request.resource.data.actorEmail == email();
+      allow update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

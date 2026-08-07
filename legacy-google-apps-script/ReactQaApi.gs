@@ -17,7 +17,7 @@ const QA_APP_CONFIG = {
   PRESENCE_SHEET_NAME: "QA App Presence",
   PRESENCE_ONLINE_SECONDS: 65,
   PROXY_SECRET_PROPERTY: "QA_APP_PROXY_SECRET",
-  CACHE_KEY: "agent-picks-agents-reviewed-v5",
+  CACHE_KEY: "agent-picks-agents-reviewed-v8-fast-runtime",
   ADMIN_EMAILS: [
     "infojr.83@gmail.com",
     "barbara.kalchik8reserve@gmail.com"
@@ -111,27 +111,44 @@ function doPost(e) {
     const actorName = qaAppCleanText_(request.actorName);
     const action = qaAppCleanText_(request.action).toLowerCase();
 
-    if (!actorEmail) throw new Error("A verified Google account email is required.");
+    if (!actorEmail) {
+      throw new Error("A verified Google account email is required.");
+    }
 
     const ss = SpreadsheetApp.openById(QA_APP_CONFIG.SPREADSHEET_ID);
-    qaAppEnsureUsersSheet_(ss);
-    qaAppEnsureSettingsSheet_(ss);
-    qaAppEnsureAuditSheet_(ss);
-    qaAppEnsurePresenceSheet_(ss);
-    qaAppSeedCoreUsers_(ss);
-    qaAppSeedDefaultSettings_(ss);
 
-    const actor = qaAppGetUserByEmail_(ss, actorEmail);
-    if (!actor) throw new Error("This Google account has not been added to the QA app.");
-    if (!actor.active) throw new Error("This QA app account is blocked. Contact Junior or Barbara.");
+    /*
+     * IMPORTANT:
+     * Runtime API requests must not run setup, formatting, seeding, or header
+     * repair. Those operations are intentionally limited to qaAppSetup().
+     * Running them during every login and heartbeat was causing 20-30 second
+     * requests and Netlify timeouts.
+     */
+    const actor = qaAppGetUserByEmailFast_(ss, actorEmail);
+
+    if (!actor) {
+      throw new Error(
+        'This Google account has not been added to the QA app. Run qaAppSetup once if the API sheets are missing.'
+      );
+    }
+
+    if (!actor.active) {
+      throw new Error("This QA app account is blocked. Contact Junior or Barbara.");
+    }
 
     if (action === "authorize") {
-      return qaAppJson_({ success: true, user: actor });
+      return qaAppJson_({
+        success: true,
+        user: actor
+      });
     }
 
     if (action === "bootstrap") {
-      const settings = qaAppReadSettings_(ss);
-      const users = actor.role === "admin" ? qaAppReadUsers_(ss) : [actor];
+      const settings = qaAppReadSettingsFast_(ss);
+      const users = actor.role === "admin"
+        ? qaAppReadUsersFast_(ss)
+        : [actor];
+
       return qaAppJson_({
         success: true,
         user: actor,
@@ -140,53 +157,6 @@ function doPost(e) {
       });
     }
 
-    if (action === "savereview") {
-      const result = qaAppSaveReview_(ss, actor, request.review || {}, actorName);
-      return qaAppJson_(result);
-    }
-
-    if (action === "upsertuser") {
-      qaAppAssertAdmin_(actor);
-      const savedUser = qaAppUpsertUser_(ss, request.user || {}, actorEmail);
-      qaAppAudit_(ss, "USER UPSERTED", actorEmail, savedUser.email, savedUser);
-      return qaAppJson_({
-        success: true,
-        message: savedUser.displayName + " was saved.",
-        user: savedUser
-      });
-    }
-
-    if (action === "setuserblocked") {
-      qaAppAssertAdmin_(actor);
-      const targetEmail = qaAppNormalizeEmail_(request.email);
-      const blocked = qaAppBoolean_(request.blocked);
-      const updated = qaAppSetUserBlocked_(ss, targetEmail, blocked, actorEmail);
-      qaAppAudit_(ss, blocked ? "USER BLOCKED" : "USER UNBLOCKED", actorEmail, targetEmail, updated);
-      return qaAppJson_({
-        success: true,
-        message: updated.displayName + (blocked ? " was blocked." : " was unblocked."),
-        user: updated
-      });
-    }
-
-    if (action === "savesettings") {
-      qaAppAssertAdmin_(actor);
-      const savedSettings = qaAppSaveSettings_(ss, request.settings || {}, actorEmail);
-      qaAppAudit_(ss, "SETTINGS UPDATED", actorEmail, "", { keys: Object.keys(savedSettings) });
-      return qaAppJson_({
-        success: true,
-        message: "QA settings were saved. Existing review rows were not changed.",
-        settings: savedSettings
-      });
-    }
-
-    if (action === "exportfilteredreviews") {
-      const file = qaAppExportFilteredReviews_(ss, actor, request.filters || {});
-      qaAppAudit_(ss, "FILTERED REVIEWS EXPORTED", actorEmail, "", request.filters || {});
-      return qaAppJson_({ success: true, data: file });
-    }
-
-
     if (action === "updatepresence") {
       const presence = qaAppUpdatePresence_(
         ss,
@@ -194,7 +164,11 @@ function doPost(e) {
         request.currentPage,
         request.sessionId
       );
-      return qaAppJson_({ success: true, presence: presence });
+
+      return qaAppJson_({
+        success: true,
+        presence: presence
+      });
     }
 
     if (action === "getpresence") {
@@ -209,12 +183,272 @@ function doPost(e) {
       return qaAppJson_({ success: true });
     }
 
+    if (action === "savereview") {
+      const result = qaAppSaveReview_(ss, actor, request.review || {}, actorName);
+      return qaAppJson_(result);
+    }
+
+    if (action === "upsertuser") {
+      qaAppAssertAdmin_(actor);
+
+      const savedUser = qaAppUpsertUser_(
+        ss,
+        request.user || {},
+        actorEmail
+      );
+
+      qaAppClearRuntimeCaches_();
+
+      qaAppAudit_(
+        ss,
+        "USER UPSERTED",
+        actorEmail,
+        savedUser.email,
+        savedUser
+      );
+
+      return qaAppJson_({
+        success: true,
+        message: savedUser.displayName + " was saved.",
+        user: savedUser
+      });
+    }
+
+    if (action === "setuserblocked") {
+      qaAppAssertAdmin_(actor);
+
+      const targetEmail = qaAppNormalizeEmail_(request.email);
+      const blocked = qaAppBoolean_(request.blocked);
+
+      const updated = qaAppSetUserBlocked_(
+        ss,
+        targetEmail,
+        blocked,
+        actorEmail
+      );
+
+      qaAppClearRuntimeCaches_();
+
+      qaAppAudit_(
+        ss,
+        blocked ? "USER BLOCKED" : "USER UNBLOCKED",
+        actorEmail,
+        targetEmail,
+        updated
+      );
+
+      return qaAppJson_({
+        success: true,
+        message: updated.displayName + (blocked ? " was blocked." : " was unblocked."),
+        user: updated
+      });
+    }
+
+    if (action === "savesettings") {
+      qaAppAssertAdmin_(actor);
+
+      const savedSettings = qaAppSaveSettings_(
+        ss,
+        request.settings || {},
+        actorEmail
+      );
+
+      qaAppClearRuntimeCaches_();
+
+      qaAppAudit_(
+        ss,
+        "SETTINGS UPDATED",
+        actorEmail,
+        "",
+        { keys: Object.keys(savedSettings) }
+      );
+
+      return qaAppJson_({
+        success: true,
+        message: "QA settings were saved. Existing review rows were not changed.",
+        settings: savedSettings
+      });
+    }
+
+    if (action === "exportfilteredreviews") {
+      const file = qaAppExportFilteredReviews_(
+        ss,
+        actor,
+        request.filters || {}
+      );
+
+      qaAppAudit_(
+        ss,
+        "FILTERED REVIEWS EXPORTED",
+        actorEmail,
+        "",
+        request.filters || {}
+      );
+
+      return qaAppJson_({
+        success: true,
+        data: file
+      });
+    }
+
     throw new Error("Unsupported React API action: " + action);
   } catch (error) {
     return qaAppJson_({
       success: false,
       message: error && error.message ? error.message : String(error)
     });
+  }
+}
+
+
+const QA_APP_RUNTIME_CACHE_SECONDS = 120;
+const QA_APP_USERS_CACHE_KEY = "qa-app-runtime-users-v2";
+const QA_APP_SETTINGS_CACHE_KEY = "qa-app-runtime-settings-v2";
+const QA_APP_PRESENCE_CLEANUP_PROPERTY = "QA_APP_LAST_PRESENCE_CLEANUP";
+
+function qaAppRequireSheet_(ss, sheetName) {
+  const sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet) {
+    throw new Error(
+      'Required QA app sheet "' + sheetName + '" was not found. Run qaAppSetup once.'
+    );
+  }
+
+  return sheet;
+}
+
+function qaAppReadUsersFast_(ss) {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(QA_APP_USERS_CACHE_KEY);
+
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (error) {
+      // Ignore an invalid cache entry and read the sheet.
+    }
+  }
+
+  const sheet = qaAppRequireSheet_(ss, QA_APP_CONFIG.USERS_SHEET_NAME);
+
+  if (sheet.getLastRow() < 2) return [];
+
+  const values = sheet
+    .getRange(
+      2,
+      1,
+      sheet.getLastRow() - 1,
+      QA_APP_USER_HEADERS.length
+    )
+    .getValues();
+
+  const users = values
+    .map(function(row) {
+      return qaAppUserFromRow_(row);
+    })
+    .filter(function(user) {
+      return Boolean(user.email);
+    });
+
+  try {
+    cache.put(
+      QA_APP_USERS_CACHE_KEY,
+      JSON.stringify(users),
+      QA_APP_RUNTIME_CACHE_SECONDS
+    );
+  } catch (error) {
+    // Cache failure must not block the app.
+  }
+
+  return users;
+}
+
+function qaAppGetUserByEmailFast_(ss, email) {
+  const target = qaAppNormalizeEmail_(email);
+  if (!target) return null;
+
+  const users = qaAppReadUsersFast_(ss);
+
+  for (let index = 0; index < users.length; index++) {
+    if (users[index].email === target) return users[index];
+  }
+
+  return null;
+}
+
+function qaAppReadSettingsFast_(ss) {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(QA_APP_SETTINGS_CACHE_KEY);
+
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch (error) {
+      // Ignore an invalid cache entry and read the sheet.
+    }
+  }
+
+  const defaults = qaAppDefaultSettings_();
+  const sheet = qaAppRequireSheet_(ss, QA_APP_CONFIG.SETTINGS_SHEET_NAME);
+  const values = qaAppSettingsMap_(sheet);
+
+  const settings = {
+    criteria: values.criteria || defaults.criteria,
+    callCenters: values.callCenters || defaults.callCenters,
+    statusOptions: values.statusOptions || defaults.statusOptions,
+    rules: Object.assign({}, defaults.rules, values.rules || {})
+  };
+
+  try {
+    cache.put(
+      QA_APP_SETTINGS_CACHE_KEY,
+      JSON.stringify(settings),
+      QA_APP_RUNTIME_CACHE_SECONDS
+    );
+  } catch (error) {
+    // Cache failure must not block the app.
+  }
+
+  return settings;
+}
+
+function qaAppClearRuntimeCaches_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    cache.remove(QA_APP_USERS_CACHE_KEY);
+    cache.remove(QA_APP_SETTINGS_CACHE_KEY);
+  } catch (error) {
+    // Cache cleanup must never block an admin action.
+  }
+}
+
+function qaAppPresenceSheetFast_(ss) {
+  return qaAppRequireSheet_(ss, QA_APP_CONFIG.PRESENCE_SHEET_NAME);
+}
+
+function qaAppCleanupPresenceMaybe_(sheet) {
+  const properties = PropertiesService.getScriptProperties();
+  const now = Date.now();
+  const lastCleanup = Number(
+    properties.getProperty(QA_APP_PRESENCE_CLEANUP_PROPERTY) || 0
+  );
+
+  if (lastCleanup && now - lastCleanup < 60 * 60 * 1000) {
+    return;
+  }
+
+  qaAppCleanupPresence_(sheet);
+
+  try {
+    properties.setProperty(
+      QA_APP_PRESENCE_CLEANUP_PROPERTY,
+      String(now)
+    );
+  } catch (error) {
+    // Cleanup timestamp failure must not block presence.
   }
 }
 
@@ -309,25 +543,37 @@ function qaAppEnsurePresenceSheet_(ss) {
 }
 
 function qaAppUpdatePresence_(ss, actor, currentPage, sessionId) {
-  const sheet = qaAppEnsurePresenceSheet_(ss);
+  const sheet = qaAppPresenceSheetFast_(ss);
   const email = qaAppNormalizeEmail_(actor.email);
   const cleanSessionId = qaAppCleanText_(sessionId);
 
-  if (!cleanSessionId) throw new Error("Presence session ID is required.");
+  if (!cleanSessionId) {
+    throw new Error("Presence session ID is required.");
+  }
+
+  const row = [
+    email,
+    qaAppCleanText_(actor.displayName),
+    qaAppCleanText_(actor.role),
+    qaAppCleanText_(currentPage) || "QA App",
+    new Date(),
+    cleanSessionId
+  ];
 
   const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  const locked = lock.tryLock(2000);
+
+  /*
+   * Presence must never block login, reviews, or saving. If another heartbeat
+   * owns the lock, return a successful presence object and let the next
+   * heartbeat perform the write.
+   */
+  if (!locked) {
+    return qaAppPresenceObject_(row, true);
+  }
 
   try {
     const rowIndex = qaAppFindPresenceRow_(sheet, email, cleanSessionId);
-    const row = [
-      email,
-      qaAppCleanText_(actor.displayName),
-      qaAppCleanText_(actor.role),
-      qaAppCleanText_(currentPage) || "QA App",
-      new Date(),
-      cleanSessionId
-    ];
 
     if (rowIndex > 0) {
       sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
@@ -335,7 +581,7 @@ function qaAppUpdatePresence_(ss, actor, currentPage, sessionId) {
       sheet.appendRow(row);
     }
 
-    qaAppCleanupPresence_(sheet);
+    qaAppCleanupPresenceMaybe_(sheet);
     return qaAppPresenceObject_(row, true);
   } finally {
     lock.releaseLock();
@@ -343,7 +589,7 @@ function qaAppUpdatePresence_(ss, actor, currentPage, sessionId) {
 }
 
 function qaAppGetPresence_(ss) {
-  const sheet = qaAppEnsurePresenceSheet_(ss);
+  const sheet = qaAppPresenceSheetFast_(ss);
   if (sheet.getLastRow() < 2) return [];
 
   const rows = sheet.getRange(
@@ -382,7 +628,7 @@ function qaAppGetPresence_(ss) {
 }
 
 function qaAppRemovePresence_(ss, actorEmail, sessionId) {
-  const sheet = qaAppEnsurePresenceSheet_(ss);
+  const sheet = qaAppPresenceSheetFast_(ss);
   if (sheet.getLastRow() < 2) return;
 
   const email = qaAppNormalizeEmail_(actorEmail);
@@ -538,25 +784,11 @@ function qaAppBuildUser_(email, displayName, role, active, guidedMode, notes) {
 }
 
 function qaAppReadUsers_(ss) {
-  const sheet = qaAppEnsureUsersSheet_(ss);
-  if (sheet.getLastRow() < 2) return [];
-
-  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, QA_APP_USER_HEADERS.length).getValues();
-  return values
-    .map(function(row) { return qaAppUserFromRow_(row); })
-    .filter(function(user) { return Boolean(user.email); });
+  return qaAppReadUsersFast_(ss);
 }
 
 function qaAppGetUserByEmail_(ss, email) {
-  const target = qaAppNormalizeEmail_(email);
-  if (!target) return null;
-
-  const users = qaAppReadUsers_(ss);
-  for (let i = 0; i < users.length; i++) {
-    if (users[i].email === target) return users[i];
-  }
-
-  return null;
+  return qaAppGetUserByEmailFast_(ss, email);
 }
 
 function qaAppUserFromRow_(row) {
@@ -610,7 +842,8 @@ function qaAppWriteUser_(ss, user, actorEmail) {
     sheet.appendRow(row);
   }
 
-  return qaAppGetUserByEmail_(ss, user.email);
+  qaAppClearRuntimeCaches_();
+  return qaAppGetUserByEmailFast_(ss, user.email);
 }
 
 function qaAppFindUserRow_(sheet, email) {
@@ -783,16 +1016,7 @@ function qaAppSeedDefaultSettings_(ss) {
 }
 
 function qaAppReadSettings_(ss) {
-  const defaults = qaAppDefaultSettings_();
-  const sheet = qaAppEnsureSettingsSheet_(ss);
-  const values = qaAppSettingsMap_(sheet);
-
-  return {
-    criteria: values.criteria || defaults.criteria,
-    callCenters: values.callCenters || defaults.callCenters,
-    statusOptions: values.statusOptions || defaults.statusOptions,
-    rules: Object.assign({}, defaults.rules, values.rules || {})
-  };
+  return qaAppReadSettingsFast_(ss);
 }
 
 function qaAppSaveSettings_(ss, rawSettings, actorEmail) {
@@ -816,7 +1040,8 @@ function qaAppSaveSettings_(ss, rawSettings, actorEmail) {
   qaAppWriteSetting_(sheet, "statusOptions", statusOptions, actorEmail);
   qaAppWriteSetting_(sheet, "rules", rules, actorEmail);
 
-  return qaAppReadSettings_(ss);
+  qaAppClearRuntimeCaches_();
+  return qaAppReadSettingsFast_(ss);
 }
 
 function qaAppValidateCriteriaSettings_(criteria) {

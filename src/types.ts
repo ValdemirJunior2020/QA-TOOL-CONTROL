@@ -104,6 +104,7 @@ export interface AuthSession {
   name: string
   picture?: string
   isDev?: boolean
+  uid?: string
 }
 
 export interface BootstrapResponse {

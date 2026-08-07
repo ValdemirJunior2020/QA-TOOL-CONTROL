@@ -11,6 +11,7 @@ import type {
 
 import {
   exportReviewsToExcel,
+  exportReviewsGoogleSheetStyle,
   type ReviewExcelFilters,
 } from '../lib/exportReviewsExcel'
 
@@ -66,6 +67,8 @@ export function ReviewsPage({
     useState(false)
   const [downloadMessage, setDownloadMessage] =
     useState('')
+  const [progress, setProgress] = useState(0)
+  const [progressLabel, setProgressLabel] = useState('')
 
   const centers = useMemo(
     () =>
@@ -186,13 +189,15 @@ export function ReviewsPage({
   ])
 
   const downloadFilteredWorkbook =
-    async () => {
+    async (format: 'team' | 'sheet' = 'team') => {
       if (downloading || !filtered.length) {
         return
       }
 
       setDownloading(true)
       setDownloadMessage('')
+      setProgress(1)
+      setProgressLabel(format === 'sheet' ? 'Preparing full sheet export' : 'Preparing team report')
 
       const filters: ReviewExcelFilters = {
         search,
@@ -206,11 +211,13 @@ export function ReviewsPage({
       }
 
       try {
-        const filename =
-          await exportReviewsToExcel(
-            reviews,
-            filters,
-          )
+        const onProgress = (percent: number, label: string) => {
+          setProgress(percent)
+          setProgressLabel(label)
+        }
+        const filename = format === 'sheet'
+          ? await exportReviewsGoogleSheetStyle(reviews, filters, onProgress)
+          : await exportReviewsToExcel(reviews, filters, onProgress)
 
         setDownloadMessage(
           `${filename} was downloaded.`,
@@ -227,7 +234,11 @@ export function ReviewsPage({
           error,
         )
       } finally {
-        setDownloading(false)
+        window.setTimeout(() => {
+          setDownloading(false)
+          setProgress(0)
+          setProgressLabel('')
+        }, 350)
       }
     }
 
@@ -268,7 +279,7 @@ export function ReviewsPage({
               type="button"
               className="secondary-button"
               onClick={() =>
-                void downloadFilteredWorkbook()
+                void downloadFilteredWorkbook('team')
               }
               disabled={
                 filtered.length === 0 ||
@@ -277,7 +288,16 @@ export function ReviewsPage({
             >
               {downloading
                 ? 'Creating Excel…'
-                : 'Download Filtered Reviews (.xlsx)'}
+                : 'Download Team Report (.xlsx)'}
+            </button>
+
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void downloadFilteredWorkbook('sheet')}
+              disabled={filtered.length === 0 || downloading}
+            >
+              {downloading ? 'Creating Excel…' : 'Download Full Google-Sheet Style'}
             </button>
 
             <button
@@ -288,7 +308,7 @@ export function ReviewsPage({
             >
               {refreshing
                 ? 'Refreshing…'
-                : 'Refresh from Sheet'}
+                : 'Refresh from Firebase'}
             </button>
           </div>
         </div>
@@ -297,6 +317,13 @@ export function ReviewsPage({
           <p className="muted">
             {downloadMessage}
           </p>
+        )}
+
+        {progress > 0 && (
+          <div className="operation-progress" aria-live="polite">
+            <div className="operation-progress-copy"><span>{progressLabel}</span><strong>{progress}%</strong></div>
+            <div className="operation-progress-track"><div className="operation-progress-fill" style={{ width: `${progress}%` }} /></div>
+          </div>
         )}
 
         <div className="filter-grid advanced-filters">

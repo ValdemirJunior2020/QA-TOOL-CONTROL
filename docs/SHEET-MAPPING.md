@@ -1,33 +1,25 @@
-# Google Sheet Mapping
+# Legacy Workbook Mapping
 
-The React form mirrors the uploaded workbook and saves into the existing `Agents Reviewed` tab.
+Google Sheets is no longer the live database. The original workbook is supported for one-time migration and for familiar Excel exports.
 
-## Form fields
+## Legacy input
 
-| React field | Original sheet cell | Destination header |
-|---|---:|---|
-| Agent Start Date | C3 | Agent Start Date |
-| Today’s Date | C4 | Today's Date |
-| Evaluator | C5 | Evaluator |
-| Agent Name | C6 | Agent Name |
-| Call Center | C7 | Call Center |
-| Call ID | C8 | Call ID |
-| QA Type | C9 | QA Type |
-| Confirmation / Itinerary # | C10 | Itinerary Number |
-| Length of Call | F8 | Length of Call |
-| Date of Call | F9 | Date of Call |
+Admin Control accepts the old `.xlsx` workbook and reads the `Agents Reviewed` sheet. Every populated review row is mapped to a Firestore document while keeping its original row number and Request ID when available.
 
-## Criteria rows
+The importer preserves these review fields: Saved Timestamp, Agent Start Date, Today's Date, Evaluator, Agent Name, Call Center, Call ID, Email Sent, QA Type, Final Score, KPI Target, Result, Markdowns, all nine criteria groups, all nine Custom Notes, Itinerary Number, Length of Call, Date of Call, and Request ID.
 
-The form uses up to nine criteria. Each criterion is saved into these existing headers:
+The importer also reads `QA App Users`, `QA App Settings`, and the latest matching state from `emails sent details`. The retired `barbara.kalchik@hotelplanner.com` record is intentionally skipped.
 
-- `Criteria N #`
-- `Criteria N Name`
-- `Criteria N Max Points`
-- `Criteria N Status`
-- `Criteria N Partial Points`
-- `Criteria N Auto Points`
-- `Criteria N Notes / Issue Found`
-- `Custom Note N`
+## Firestore collections
 
-The metadata, nine criteria groups, nine custom-note columns, itinerary, call length, and call date match the existing A:CJ structure. Missing headers are appended only when necessary; existing rows are never shifted or cleared.
+- `reviews` — live QA reviews and imported legacy values
+- `users` — evaluator/admin access and permissions
+- `settings/main` — criteria, call centers, status options, and QA rules
+- `meta/reviews` — next legacy-style row number
+- `auditLogs` — app security/admin audit records
+
+Realtime presence is stored separately in Firebase Realtime Database under `presence/{uid}`.
+
+## Excel output
+
+Review History has two exports. The Team Report keeps the organized send-to-team format. The Full Google-Sheet Style export recreates the 89-column `Agents Reviewed` A:CK layout and uses preserved legacy column values when available.

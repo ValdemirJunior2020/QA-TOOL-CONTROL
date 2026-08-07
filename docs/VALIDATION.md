@@ -1,18 +1,15 @@
 # Validation Report
 
-Completed inside the build environment:
+The Firebase migration was statically checked for TypeScript/TSX syntax and project JSON validity. The legacy workbook was inspected and contains 131 populated `Agents Reviewed` review rows (rows 2 through 132); the later styled/blank rows are intentionally skipped by the importer.
 
-- Parsed every project JSON file successfully.
-- Checked `netlify/functions/qa-api.mjs` with `node --check`.
-- Checked `apps-script/ReactQaApi.gs` as JavaScript with `node --check`.
-- Ran a TypeScript source check across the React files using the installed TypeScript compiler and temporary module declarations.
-- Confirmed no `node_modules`, build output, or secret-filled production file is included.
+Production references to the Netlify Function and Node API were removed. Google Apps Script files are retained only in `legacy-google-apps-script/` and are not called by the React app.
 
-The package registry did not finish responding in this environment, so `npm install` and the final Vite production build could not be completed here. Run these commands after downloading:
+The complete `npm run check` / Vite build requires a complete `node_modules` installation. If dependencies are not already installed, run:
 
 ```bash
 npm install
 npm run check
 npm run build
-npm run dev
 ```
+
+Firebase Console setup and security-rule deployment are one-time deployment steps described in `FIREBASE-MIGRATION-README.md`.

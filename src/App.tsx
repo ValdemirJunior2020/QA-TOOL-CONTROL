@@ -3,8 +3,9 @@ import { GoogleSignIn } from './components/GoogleSignIn'
 import { Shell, type AppPage } from './components/Shell'
 import { DEFAULT_SETTINGS } from './data/defaults'
 import { bootstrap, createQaBackup, fetchReviews, getPresence, markReviewEmailSent, removePresence, restoreLatestQaBackup, saveReview, saveSettings, saveUser, setUserBlocked, updatePresence, type PresenceUser } from './lib/api'
-import { clearSession, loadSession, saveSession } from './lib/auth'
+import { signOutFirebase, waitForFirebaseSession } from './lib/auth'
 import { AdminPage } from './pages/AdminPage'
+import { importLegacyWorkbookToFirebase } from './lib/importLegacyWorkbook'
 import { DashboardPage } from './pages/DashboardPage'
 import { ReviewPage } from './pages/ReviewPage'
 import { ReviewsPage } from './pages/ReviewsPage'
@@ -26,7 +27,7 @@ const LOADING_MESSAGES = [
   'Counting how many times the guest repeated the confirmation number…',
   'Making sure nobody promised a refund without checking the matrix…',
   'Checking if the matrix has another surprise update…',
-  'Convincing Google Sheets to cooperate today…',
+  'Checking Firebase before another review lands…',
   'Making sure Kelly doesn’t have to memorize 400 QA rules…',
   'Guided Mode is helping Kelly avoid accidental QA adventures…',
   'Looking for the agent who forgot to document the notes…',
@@ -39,7 +40,7 @@ const LOADING_MESSAGES = [
   'Investigating why the call lasted 37 minutes…',
   'Checking whether the agent followed the process or invented one…',
   'Preparing the QA score while protecting everyone’s feelings…',
-  'Connecting to Google Sheets before another call needs reviewing…',
+  'Connecting securely to Firebase before another call needs reviewing…',
   'Loading the dashboard while pretending everything is under control… 😄'
 ]
 
@@ -71,7 +72,7 @@ function getPresencePageLabel(page: AppPage): string {
   return labels[page]
 }
 
-function LoadingScreen() {
+function LoadingScreen({ percent = 40 }: { percent?: number }) {
   const [messageIndex, setMessageIndex] = useState(0)
 
   useEffect(() => {
@@ -90,6 +91,7 @@ function LoadingScreen() {
         <div className="spinner" aria-hidden="true" />
 
         <h1>Loading QA Control Center…</h1>
+        <div className="operation-progress loading-progress"><div className="operation-progress-copy"><span>Connecting to Firebase</span><strong>{percent}%</strong></div><div className="operation-progress-track"><div className="operation-progress-fill" style={{ width: `${percent}%` }} /></div></div>
 
         <p
           key={messageIndex}
@@ -108,13 +110,16 @@ function LoadingScreen() {
 }
 
 export default function App() {
-  const [session, setSession] = useState<AuthSession | null>(() => loadSession())
+  const [session, setSession] = useState<AuthSession | null>(null)
+  const [authReady, setAuthReady] = useState(false)
   const [currentUser, setCurrentUser] = useState<QaUser | null>(null)
   const [users, setUsers] = useState<QaUser[]>([])
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
   const [reviews, setReviews] = useState<ReviewRecord[]>([])
   const [activePage, setActivePage] = useState<AppPage>('dashboard')
-  const [loading, setLoading] = useState(Boolean(session))
+  const [loading, setLoading] = useState(true)
+  const [loadingPercent, setLoadingPercent] = useState(10)
+  const [operationProgress, setOperationProgress] = useState<{ percent: number; label: string } | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [authError, setAuthError] = useState('')
@@ -128,14 +133,33 @@ export default function App() {
     window.setTimeout(() => setToast(null), 5000)
   }, [])
 
+  useEffect(() => {
+    let disposed = false
+    void waitForFirebaseSession()
+      .then((existingSession) => {
+        if (disposed) return
+        setSession(existingSession)
+        setAuthReady(true)
+        if (!existingSession) setLoading(false)
+      })
+      .catch((error) => {
+        if (disposed) return
+        setAuthError(error instanceof Error ? error.message : 'Firebase sign-in could not be restored.')
+        setAuthReady(true)
+        setLoading(false)
+      })
+    return () => { disposed = true }
+  }, [])
+
   const loadApp = useCallback(async (activeSession: AuthSession) => {
     setLoading(true)
+    setLoadingPercent(18)
     setAuthError('')
     try {
-      const [boot, reviewRows] = await Promise.all([
-        bootstrap(activeSession),
-        fetchReviews(activeSession),
-      ])
+      const boot = await bootstrap(activeSession)
+      setLoadingPercent(55)
+      const reviewRows = await fetchReviews(activeSession)
+      setLoadingPercent(90)
       if (!boot.success || !boot.user) throw new Error(boot.message || 'Your account could not be loaded.')
       if (!boot.user.active) throw new Error('Your QA app account is blocked. Contact Junior or Barbara.')
 
@@ -143,20 +167,20 @@ export default function App() {
       setUsers(boot.users || [boot.user])
       setSettings(boot.settings || DEFAULT_SETTINGS)
       setReviews(reviewRows)
+      setLoadingPercent(100)
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'The app could not be loaded.'
       setAuthError(message)
       setCurrentUser(null)
-      clearSession()
-      setSession(null)
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
+    if (!authReady) return
     if (session) void loadApp(session)
-  }, [loadApp, session])
+  }, [authReady, loadApp, session])
 
   useEffect(() => {
     activePageRef.current = activePage
@@ -250,8 +274,8 @@ export default function App() {
   }, [session, currentUser])
 
   const handleLogin = (nextSession: AuthSession) => {
-    saveSession(nextSession)
     setSession(nextSession)
+    setAuthReady(true)
   }
 
   const handleLogout = () => {
@@ -267,8 +291,7 @@ export default function App() {
       })
     }
 
-    clearSession()
-    if (window.google) window.google.accounts.id.disableAutoSelect()
+    void signOutFirebase().catch((error) => console.warn('Firebase sign-out failed.', error))
     setSession(null)
     setCurrentUser(null)
     setUsers([])
@@ -282,23 +305,28 @@ export default function App() {
   const refreshReviews = async (force = true) => {
     if (!session) return
     setRefreshing(true)
+    setOperationProgress({ percent: 15, label: 'Refreshing reviews from Firebase' })
     try {
       setReviews(await fetchReviews(session, force))
-      showToast('Review data refreshed from the Google Sheet.', 'success')
+      setOperationProgress({ percent: 100, label: 'Firebase reviews refreshed' })
+      showToast('Review data refreshed from Firebase.', 'success')
     } catch (caught) {
       showToast(caught instanceof Error ? caught.message : 'Refresh failed.', 'error')
     } finally {
       setRefreshing(false)
+      window.setTimeout(() => setOperationProgress(null), 400)
     }
   }
 
   const handleSaveReview = async (review: ReviewDraft) => {
     if (!session) return
     setBusy(true)
+    setOperationProgress({ percent: 20, label: 'Validating and saving review' })
     try {
       const response = await saveReview(session, review)
+      setOperationProgress({ percent: 70, label: 'Review saved — refreshing history' })
       if (!response.success) throw new Error(response.message || 'The review was not saved.')
-      showToast(response.message || 'Review saved to Agents Reviewed.', 'success')
+      showToast(response.message || 'Review saved to Firebase.', 'success')
       await refreshReviews(true)
       setActivePage('dashboard')
     } catch (caught) {
@@ -307,14 +335,17 @@ export default function App() {
       throw caught
     } finally {
       setBusy(false)
+      window.setTimeout(() => setOperationProgress(null), 500)
     }
   }
 
   const handleSaveUser = async (user: QaUser) => {
     if (!session) return
     setBusy(true)
+    setOperationProgress({ percent: 25, label: 'Saving user permissions' })
     try {
       const response = await saveUser(session, user)
+      setOperationProgress({ percent: 100, label: 'Permissions saved' })
       if (!response.success) throw new Error(response.message || 'The person was not saved.')
       const saved = response.user || user
       setUsers((current) => {
@@ -328,6 +359,7 @@ export default function App() {
       throw caught
     } finally {
       setBusy(false)
+      window.setTimeout(() => setOperationProgress(null), 450)
     }
   }
 
@@ -336,8 +368,10 @@ export default function App() {
     const action = blocked ? 'block' : 'unblock'
     if (!window.confirm(`Are you sure you want to ${action} this account?`)) return
     setBusy(true)
+    setOperationProgress({ percent: 25, label: `${blocked ? 'Blocking' : 'Unblocking'} account` })
     try {
       const response = await setUserBlocked(session, email, blocked)
+      setOperationProgress({ percent: 100, label: 'Account access updated' })
       if (!response.success) throw new Error(response.message || `The account could not be ${blocked ? 'blocked' : 'unblocked'}.`)
       setUsers((current) => current.map((item) => item.email.toLowerCase() === email.toLowerCase() ? { ...item, active: !blocked } : item))
       showToast(response.message || `Account ${blocked ? 'blocked' : 'unblocked'}.`, 'success')
@@ -345,14 +379,17 @@ export default function App() {
       showToast(caught instanceof Error ? caught.message : 'The account status was not changed.', 'error')
     } finally {
       setBusy(false)
+      window.setTimeout(() => setOperationProgress(null), 450)
     }
   }
 
   const handleSaveSettings = async (nextSettings: AppSettings) => {
     if (!session) return
     setBusy(true)
+    setOperationProgress({ percent: 25, label: 'Saving QA settings' })
     try {
       const response = await saveSettings(session, nextSettings)
+      setOperationProgress({ percent: 100, label: 'QA settings saved' })
       if (!response.success) throw new Error(response.message || 'Settings were not saved.')
       setSettings(response.settings || nextSettings)
       showToast(response.message || 'QA settings were saved.', 'success')
@@ -361,19 +398,47 @@ export default function App() {
       throw caught
     } finally {
       setBusy(false)
+      window.setTimeout(() => setOperationProgress(null), 450)
     }
   }
 
 
   const handleMarkEmailSent = async (review: ReviewRecord, sent: boolean) => {
     if (!session) return
+    setOperationProgress({ percent: 30, label: 'Updating email status' })
     const response = await markReviewEmailSent(session, review, sent)
+    setOperationProgress({ percent: 100, label: 'Email status updated' })
     if (!response.success) throw new Error(response.message || 'Email status was not saved.')
     setReviews((current) => current.map((item) => item.rowNumber === review.rowNumber ? { ...item, emailSent: sent, emailSentAt: sent ? new Date().toISOString() : '', emailSentBy: sent ? currentUser?.displayName || '' : '' } : item))
     showToast(response.message || `Email marked ${sent ? 'sent' : 'not sent'}.`, 'success')
+    window.setTimeout(() => setOperationProgress(null), 450)
   }
 
   
+
+  const handleImportLegacyWorkbook = async (file: File) => {
+    if (!session) return
+    setBusy(true)
+    try {
+      const result = await importLegacyWorkbookToFirebase(file, session, (percent, label) => {
+        setOperationProgress({ percent, label })
+      })
+      const boot = await bootstrap(session)
+      setCurrentUser(boot.user)
+      setUsers(boot.users || [boot.user])
+      setSettings(boot.settings || DEFAULT_SETTINGS)
+      setReviews(await fetchReviews(session, true))
+      showToast(`Migration complete: ${result.reviews} reviews and ${result.users} users imported.`, 'success')
+      return result
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : 'Legacy migration failed.'
+      showToast(message, 'error')
+      throw caught
+    } finally {
+      setBusy(false)
+      window.setTimeout(() => setOperationProgress(null), 800)
+    }
+  }
 
   const handleCreateBackup = async () => {
     if (!session) return
@@ -383,15 +448,13 @@ export default function App() {
   }
 
   const handleRestoreLatestBackup = async () => {
-    if (!session || !window.confirm('Restore the latest QA backup? Current tab contents will be replaced.')) return
+    if (!session) return
     const response = await restoreLatestQaBackup(session)
-    if (!response.success) throw new Error(response.message || 'Restore failed.')
-    showToast(response.message || 'Latest backup restored.', 'success')
-    await refreshReviews(true)
+    showToast(response.message || 'Use Admin Control to import a legacy Excel workbook.', response.success ? 'success' : 'info')
   }
 
-  if (session && loading) {
-    return <LoadingScreen />
+  if (!authReady || (session && loading)) {
+    return <LoadingScreen percent={loadingPercent} />
   }
 
   if (!session || !currentUser) {
@@ -456,10 +519,17 @@ export default function App() {
           onSaveUser={handleSaveUser}
           onSetBlocked={handleSetBlocked}
           onSaveSettings={handleSaveSettings}
+          onImportLegacyWorkbook={handleImportLegacyWorkbook}
           busy={busy}
         />
       )}
 
+      {operationProgress && (
+        <div className="global-progress-card" aria-live="polite">
+          <div className="operation-progress-copy"><span>{operationProgress.label}</span><strong>{operationProgress.percent}%</strong></div>
+          <div className="operation-progress-track"><div className="operation-progress-fill" style={{ width: `${operationProgress.percent}%` }} /></div>
+        </div>
+      )}
       {toast && <div className={`toast ${toast.type}`}>{toast.message}</div>}
     </Shell>
   )

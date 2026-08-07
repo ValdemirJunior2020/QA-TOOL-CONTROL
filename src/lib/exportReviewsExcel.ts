@@ -906,7 +906,9 @@ function saveWorkbook(
 export async function exportReviewsToExcel(
   allReviews: ReviewRecord[],
   filters: ReviewExcelFilters,
+  onProgress?: (percent: number, label: string) => void,
 ): Promise<string> {
+  onProgress?.(5, 'Filtering reviews')
   const reviews =
     filterReviews(
       allReviews,
@@ -1056,6 +1058,7 @@ export async function exportReviewsToExcel(
       review,
       reviewIndex,
     ) => {
+      onProgress?.(10 + Math.round((reviewIndex / Math.max(1, reviews.length)) * 75), `Building team report ${reviewIndex + 1} of ${reviews.length}`)
       const agentName =
         text(
           (review as any).agentName,
@@ -1619,6 +1622,7 @@ export async function exportReviewsToExcel(
       filters,
     )
 
+  onProgress?.(90, 'Creating Excel file')
   const buffer =
     await workbook.xlsx.writeBuffer()
 
@@ -1626,6 +1630,137 @@ export async function exportReviewsToExcel(
     buffer,
     filename,
   )
+  onProgress?.(100, 'Excel download ready')
 
+  return filename
+}
+const GOOGLE_SHEET_HEADERS = [
+  'Saved Timestamp', 'Agent Start Date', "Today's Date", 'Evaluator', 'Agent Name', 'Call Center', 'Call ID', 'Email Sent?', 'QA Type', 'Final Score', 'KPI Target', 'Result', 'Markdowns',
+  ...Array.from({ length: 9 }, (_, index) => {
+    const n = index + 1
+    return [`Criteria ${n} #`, `Criteria ${n} Name`, `Criteria ${n} Max Points`, `Criteria ${n} Status`, `Criteria ${n} Partial Points`, `Criteria ${n} Auto Points`, `Criteria ${n} Notes / Issue Found`]
+  }).flat(),
+  ...Array.from({ length: 9 }, (_, index) => `Custom Note ${index + 1}`),
+  'Itinerary Number', 'Length of Call', 'Date of Call', 'Request ID',
+]
+
+function sheetStyleRow(review: ReviewRecord): unknown[] {
+  const legacyColumns = (review as any).legacyColumns as Record<string, unknown> | undefined
+  if (legacyColumns && Object.keys(legacyColumns).length) {
+    return GOOGLE_SHEET_HEADERS.map((header) => {
+      if (header === 'Email Sent?') return Boolean(review.emailSent)
+      if (header === 'Request ID') return review.id || legacyColumns[header] || ''
+      return legacyColumns[header] ?? ''
+    })
+  }
+
+  const criteria = Array.isArray(review.criteria) ? review.criteria : []
+  const row: unknown[] = [
+    review.savedTimestamp || '',
+    review.agentStartDate || '',
+    review.reviewDate || '',
+    review.evaluator || '',
+    review.agentName || '',
+    review.callCenter || '',
+    review.callId || '',
+    Boolean(review.emailSent),
+    review.qaType || '',
+    Number(review.finalScore || 0),
+    Number(review.kpiTarget || 0),
+    review.result || '',
+    Number(review.markdowns || 0),
+  ]
+
+  for (let index = 0; index < 9; index += 1) {
+    const criterion: any = criteria[index] || {}
+    row.push(
+      criterion.number ?? '',
+      criterion.name ?? '',
+      criterion.points ?? '',
+      criterion.status ?? '',
+      criterion.status === 'Partial' ? (criterion.partialPoints ?? (Number.isFinite(Number(criterion.points)) ? Number(criterion.points) / 2 : '')) : (criterion.partialPoints ?? ''),
+      criterion.autoPoints ?? '',
+      criterion.notes ?? '',
+    )
+  }
+
+  for (let index = 0; index < 9; index += 1) {
+    row.push((criteria[index] as any)?.customNote ?? '')
+  }
+
+  row.push(
+    review.itineraryNumber || '',
+    review.callLength || '',
+    review.callDate || '',
+    review.id || '',
+  )
+  return row
+}
+
+export async function exportReviewsGoogleSheetStyle(
+  allReviews: ReviewRecord[],
+  filters: ReviewExcelFilters,
+  onProgress?: (percent: number, label: string) => void,
+): Promise<string> {
+  onProgress?.(5, 'Filtering Firebase reviews')
+  const reviews = filterReviews(allReviews, filters).slice().sort((a, b) => Number(a.rowNumber || 0) - Number(b.rowNumber || 0))
+  if (!reviews.length) throw new Error('No reviews match the selected filters.')
+
+  const workbook = new ExcelJS.Workbook()
+  workbook.creator = 'QA Control Center - Firebase'
+  workbook.company = 'HotelPlanner'
+  const sheet = workbook.addWorksheet('Agents Reviewed', {
+    views: [{ state: 'frozen', ySplit: 1, xSplit: 0, showGridLines: true }],
+  })
+
+  const header = sheet.addRow(GOOGLE_SHEET_HEADERS)
+  header.height = 34
+  header.eachCell((cell) => {
+    cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } }
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF24165F' } }
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+      bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+      left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+      right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+    }
+  })
+  sheet.autoFilter = { from: 'A1', to: 'CK1' }
+
+  const dateHeaders = new Set(['Saved Timestamp', 'Agent Start Date', "Today's Date", 'Date of Call'])
+  const dateColumnIndexes = GOOGLE_SHEET_HEADERS
+    .map((headerName, index) => dateHeaders.has(headerName) ? index + 1 : 0)
+    .filter(Boolean)
+
+  reviews.forEach((review, index) => {
+    const row = sheet.addRow(sheetStyleRow(review))
+    row.alignment = { vertical: 'top', wrapText: true }
+    dateColumnIndexes.forEach((columnIndex) => {
+      const cell = row.getCell(columnIndex)
+      if (typeof cell.value === 'number' || cell.value instanceof Date) {
+        cell.numFmt = columnIndex === 1 ? 'mm/dd/yyyy hh:mm:ss' : 'mm/dd/yyyy'
+      }
+    })
+    if (index % 2 === 1) {
+      row.eachCell((cell) => { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8F7FC' } } })
+    }
+    onProgress?.(10 + Math.round(((index + 1) / reviews.length) * 72), `Building sheet row ${index + 1} of ${reviews.length}`)
+  })
+
+  // Match the useful Google Sheet proportions without making all 89 columns huge.
+  sheet.columns.forEach((column, index) => {
+    const headerName = GOOGLE_SHEET_HEADERS[index] || ''
+    if (/Name|Notes|Custom Note|Issue Found/.test(headerName)) column.width = /Notes|Custom/.test(headerName) ? 34 : 28
+    else if (/Timestamp|Date/.test(headerName)) column.width = 18
+    else if (/Call ID|Itinerary|Request ID/.test(headerName)) column.width = 26
+    else column.width = 14
+  })
+
+  onProgress?.(88, 'Creating Google-Sheet style workbook')
+  const buffer = await workbook.xlsx.writeBuffer()
+  const filename = `Agents Reviewed - Firebase - ${dateKey(new Date())}.xlsx`
+  saveWorkbook(buffer, filename)
+  onProgress?.(100, 'Full Excel backup ready')
   return filename
 }

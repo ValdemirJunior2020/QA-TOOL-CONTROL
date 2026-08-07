@@ -1,483 +1,6 @@
-import type {
-  ApiResponse,
-  AppSettings,
-  AuthSession,
-  BootstrapResponse,
-  QaUser,
-  ReviewDraft,
-  ReviewRecord,
-} from '../types'
-
-const API_ENDPOINT = '/api/qa-api'
-
-export type ApiErrorCode =
-  | 'SESSION_EXPIRED'
-  | 'UNAUTHORIZED'
-  | 'TIMEOUT'
-  | 'NETWORK_ERROR'
-  | 'BAD_GATEWAY'
-  | 'SERVER_ERROR'
-  | 'INVALID_RESPONSE'
-  | 'REQUEST_FAILED'
-
-export class QaApiError extends Error {
-  readonly code: ApiErrorCode
-  readonly status?: number
-  readonly requiresLogin: boolean
-
-  constructor(
-    message: string,
-    code: ApiErrorCode,
-    options?: {
-      status?: number
-      requiresLogin?: boolean
-    },
-  ) {
-    super(message)
-
-    this.name = 'QaApiError'
-    this.code = code
-    this.status = options?.status
-    this.requiresLogin = options?.requiresLogin ?? false
-  }
-}
-
-/**
- * Checks technical server messages without displaying them to the user.
- * This prevents Google token information, emails, IDs, and payloads
- * from appearing inside the application's toast notifications.
- */
-function containsExpiredTokenMessage(message: string): boolean {
-  const normalized = message.toLowerCase()
-
-  return (
-    normalized.includes('token used too late') ||
-    normalized.includes('token expired') ||
-    normalized.includes('expired token') ||
-    normalized.includes('id token has expired') ||
-    normalized.includes('invalid token') ||
-    normalized.includes('invalid id token') ||
-    normalized.includes('jwt expired') ||
-    normalized.includes('credential expired')
-  )
-}
-
-function containsUnauthorizedMessage(message: string): boolean {
-  const normalized = message.toLowerCase()
-
-  return (
-    normalized.includes('unauthorized') ||
-    normalized.includes('not authorized') ||
-    normalized.includes('authentication required') ||
-    normalized.includes('invalid credential') ||
-    normalized.includes('invalid authorization') ||
-    normalized.includes('missing authorization')
-  )
-}
-
-function containsTimeoutMessage(message: string): boolean {
-  const normalized = message.toLowerCase()
-
-  return (
-    normalized.includes('timeout') ||
-    normalized.includes('timed out') ||
-    normalized.includes('deadline exceeded') ||
-    normalized.includes('gateway timeout')
-  )
-}
-
-function getFriendlyServerError(
-  status: number,
-  serverMessage = '',
-): QaApiError {
-  if (
-    status === 401 ||
-    containsExpiredTokenMessage(serverMessage)
-  ) {
-    return new QaApiError(
-      'Your Google session expired. Please sign out, sign back in, and try again.',
-      'SESSION_EXPIRED',
-      {
-        status,
-        requiresLogin: true,
-      },
-    )
-  }
-
-  if (
-    status === 403 ||
-    containsUnauthorizedMessage(serverMessage)
-  ) {
-    return new QaApiError(
-      'Your account is not authorized to complete this action. Please sign out and sign back in. If the problem continues, contact an administrator.',
-      'UNAUTHORIZED',
-      {
-        status,
-        requiresLogin: true,
-      },
-    )
-  }
-
-  if (
-    status === 408 ||
-    status === 504 ||
-    containsTimeoutMessage(serverMessage)
-  ) {
-    return new QaApiError(
-      'Google Sheets took too long to respond. Please wait a few seconds and try again.',
-      'TIMEOUT',
-      { status },
-    )
-  }
-
-  if (status === 502 || status === 503) {
-    return new QaApiError(
-      'The connection to Google Sheets is temporarily unavailable. Please wait a few seconds and try again.',
-      'BAD_GATEWAY',
-      { status },
-    )
-  }
-
-  if (status >= 500) {
-    return new QaApiError(
-      'The server could not complete the request. Please try again. If the problem continues, contact an administrator.',
-      'SERVER_ERROR',
-      { status },
-    )
-  }
-
-  return new QaApiError(
-    'The request could not be completed. Please check the information and try again.',
-    'REQUEST_FAILED',
-    { status },
-  )
-}
-
-/**
- * Converts any error into a safe message that can be displayed in the UI.
- */
-export function getFriendlyApiError(error: unknown): string {
-  if (error instanceof QaApiError) {
-    return error.message
-  }
-
-  if (error instanceof TypeError) {
-    return 'The app could not reach the server. Check your internet connection and try again.'
-  }
-
-  if (error instanceof Error) {
-    if (containsExpiredTokenMessage(error.message)) {
-      return 'Your Google session expired. Please sign out, sign back in, and try again.'
-    }
-
-    if (containsUnauthorizedMessage(error.message)) {
-      return 'Your session is no longer authorized. Please sign out and sign back in.'
-    }
-
-    if (containsTimeoutMessage(error.message)) {
-      return 'Google Sheets took too long to respond. Please wait a few seconds and try again.'
-    }
-  }
-
-  return 'Something went wrong. Please try again. If the problem continues, sign out and sign back in.'
-}
-
-/**
- * Returns true when the user must sign in again.
- */
-export function requiresNewLogin(error: unknown): boolean {
-  if (error instanceof QaApiError) {
-    return error.requiresLogin
-  }
-
-  if (error instanceof Error) {
-    return (
-      containsExpiredTokenMessage(error.message) ||
-      containsUnauthorizedMessage(error.message)
-    )
-  }
-
-  return false
-}
-
-async function parseJsonResponse<T>(
-  response: Response,
-): Promise<T> {
-  const text = await response.text()
-
-  let data: T | null = null
-
-  if (text.trim()) {
-    try {
-      data = JSON.parse(text) as T
-    } catch {
-      if (!response.ok) {
-        throw getFriendlyServerError(response.status)
-      }
-
-      throw new QaApiError(
-        'The server returned an unreadable response. Please try again.',
-        'INVALID_RESPONSE',
-        { status: response.status },
-      )
-    }
-  }
-
-  if (!response.ok) {
-    const serverMessage =
-      data &&
-      typeof data === 'object' &&
-      'message' in data &&
-      typeof (data as { message?: unknown }).message === 'string'
-        ? String((data as { message: string }).message)
-        : ''
-
-    throw getFriendlyServerError(
-      response.status,
-      serverMessage,
-    )
-  }
-
-  if (data === null) {
-    throw new QaApiError(
-      'The server returned an empty response. Please try again.',
-      'INVALID_RESPONSE',
-      { status: response.status },
-    )
-  }
-
-  return data
-}
-
-function authHeaders(session: AuthSession): HeadersInit {
-  if (session.isDev) {
-    return {
-      'Content-Type': 'application/json',
-      'x-dev-email': session.email,
-      'x-dev-name': session.name,
-    }
-  }
-
-  return {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${session.idToken}`,
-  }
-}
-
-async function apiFetch(
-  input: RequestInfo | URL,
-  init?: RequestInit,
-): Promise<Response> {
-  try {
-    return await fetch(input, init)
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new QaApiError(
-        'The request took too long and was stopped. Please try again.',
-        'TIMEOUT',
-      )
-    }
-
-    throw new QaApiError(
-      'The app could not reach the server. Check your internet connection and try again.',
-      'NETWORK_ERROR',
-    )
-  }
-}
-
-async function post<T>(
-  session: AuthSession,
-  action: string,
-  payload: Record<string, unknown> = {},
-): Promise<T> {
-  const response = await apiFetch(API_ENDPOINT, {
-    method: 'POST',
-    headers: authHeaders(session),
-    body: JSON.stringify({
-      action,
-      ...payload,
-    }),
-  })
-
-  return parseJsonResponse<T>(response)
-}
-
-export async function bootstrap(
-  session: AuthSession,
-): Promise<BootstrapResponse> {
-  return post<BootstrapResponse>(session, 'bootstrap')
-}
-
-export async function fetchReviews(
-  session: AuthSession,
-  refresh = false,
-): Promise<ReviewRecord[]> {
-  const query = new URLSearchParams({
-    action: 'reviews',
-  })
-
-  if (refresh) {
-    query.set('refresh', '1')
-  }
-
-  const response = await apiFetch(
-    `${API_ENDPOINT}?${query.toString()}`,
-    {
-      headers: authHeaders(session),
-    },
-  )
-
-  const result = await parseJsonResponse<{
-    success: boolean
-    reviews?: ReviewRecord[]
-    message?: string
-  }>(response)
-
-  if (!result.success) {
-    if (
-      result.message &&
-      containsExpiredTokenMessage(result.message)
-    ) {
-      throw new QaApiError(
-        'Your Google session expired. Please sign out, sign back in, and try again.',
-        'SESSION_EXPIRED',
-        {
-          requiresLogin: true,
-        },
-      )
-    }
-
-    throw new QaApiError(
-      'The reviews could not be loaded. Please try again.',
-      'REQUEST_FAILED',
-    )
-  }
-
-  return result.reviews || []
-}
-
-export async function saveReview(
-  session: AuthSession,
-  review: ReviewDraft,
-): Promise<ApiResponse> {
-  return post<ApiResponse>(
-    session,
-    'saveReview',
-    { review },
-  )
-}
-
-export async function saveUser(
-  session: AuthSession,
-  user: QaUser,
-): Promise<ApiResponse<QaUser>> {
-  return post<ApiResponse<QaUser>>(
-    session,
-    'upsertUser',
-    { user },
-  )
-}
-
-export async function setUserBlocked(
-  session: AuthSession,
-  email: string,
-  blocked: boolean,
-): Promise<ApiResponse> {
-  return post<ApiResponse>(
-    session,
-    'setUserBlocked',
-    {
-      email,
-      blocked,
-    },
-  )
-}
-
-export async function saveSettings(
-  session: AuthSession,
-  settings: AppSettings,
-): Promise<ApiResponse<AppSettings>> {
-  return post<ApiResponse<AppSettings>>(
-    session,
-    'saveSettings',
-    { settings },
-  )
-}
-
-export async function markReviewEmailSent(
-  session: AuthSession,
-  review: ReviewRecord,
-  sent: boolean,
-): Promise<ApiResponse<ReviewRecord>> {
-  return post<ApiResponse<ReviewRecord>>(
-    session,
-    'markEmailSent',
-    {
-      rowNumber: review.rowNumber,
-      reviewId: review.id,
-      sent,
-    },
-  )
-}
-
-export interface ReviewExportFilters {
-  search: string
-  result: string
-  center: string
-  qaType: string
-  evaluator: string
-  emailStatus: string
-  dateFrom: string
-  dateTo: string
-}
-
-export async function exportReviewsWorkbook(
-  session: AuthSession,
-  filters: ReviewExportFilters,
-): Promise<{
-  filename: string
-  base64: string
-}> {
-  const response = await post<
-    ApiResponse<{
-      filename: string
-      base64: string
-    }>
-  >(
-    session,
-    'exportFilteredReviews',
-    { filters },
-  )
-
-  if (!response.success || !response.data) {
-    throw new QaApiError(
-      response.message
-        ? getFriendlyApiError(new Error(response.message))
-        : 'The filtered review workbook could not be created. Please try again.',
-      'REQUEST_FAILED',
-    )
-  }
-
-  return response.data
-}
-
-export async function createQaBackup(
-  session: AuthSession,
-): Promise<ApiResponse> {
-  return post<ApiResponse>(
-    session,
-    'createBackup',
-  )
-}
-
-export async function restoreLatestQaBackup(
-  session: AuthSession,
-): Promise<ApiResponse> {
-  return post<ApiResponse>(
-    session,
-    'restoreLatestBackup',
-  )
-}
+import type { ApiResponse, AppSettings, AuthSession, BootstrapResponse, CriterionAnswer, QaUser, ReviewDraft, ReviewRecord } from '../types'
+import { DEFAULT_SETTINGS } from '../data/defaults'
+import { ADMIN_EMAILS, BARBARA_EMAIL, OWNER_EMAIL, firestore, normalizeEmail, realtimeDb } from './firebase'
 
 export interface PresenceUser {
   email: string
@@ -489,76 +12,271 @@ export interface PresenceUser {
   online: boolean
 }
 
-interface PresenceListResponse {
-  success: boolean
-  users?: PresenceUser[]
-  message?: string
+const viewerPermissions = {
+  canSubmitReviews: false,
+  canViewHistory: true,
+  canEditAgentDetails: false,
+  canEditCriteriaSelections: false,
+  canEditCustomNotes: false,
 }
 
-export async function updatePresence(
-  session: AuthSession,
-  currentPage: string,
-  sessionId: string,
-): Promise<PresenceUser | null> {
-  const response = await post<{
-    success: boolean
-    presence?: PresenceUser
-    message?: string
-  }>(
-    session,
-    'updatePresence',
-    {
-      currentPage,
-      sessionId,
-    },
-  )
-
-  if (!response.success) {
-    throw new QaApiError(
-      response.message || 'Live presence could not be updated.',
-      'REQUEST_FAILED',
-    )
-  }
-
-  return response.presence || null
-}
-
-export async function getPresence(
-  session: AuthSession,
-): Promise<PresenceUser[]> {
-  const response = await post<PresenceListResponse>(
-    session,
-    'getPresence',
-  )
-
-  if (!response.success) {
-    throw new QaApiError(
-      response.message || 'Live users could not be loaded.',
-      'REQUEST_FAILED',
-    )
-  }
-
-  return response.users || []
-}
-
-export async function removePresence(
-  session: AuthSession,
-  sessionId: string,
-): Promise<void> {
-  const response = await post<{
-    success: boolean
-    message?: string
-  }>(
-    session,
-    'removePresence',
-    { sessionId },
-  )
-
-  if (!response.success) {
-    throw new QaApiError(
-      response.message || 'Live presence could not be removed.',
-      'REQUEST_FAILED',
-    )
+function viewerFromSession(session: AuthSession): QaUser {
+  return {
+    email: normalizeEmail(session.email),
+    displayName: session.name || session.email,
+    role: 'viewer',
+    active: true,
+    guidedMode: false,
+    notes: 'Viewer access. An administrator must add this account before it can submit reviews.',
+    permissions: { ...viewerPermissions },
   }
 }
 
+function sanitizeUser(raw: any, fallback?: QaUser): QaUser {
+  const base = fallback || viewerFromSession({ idToken: '', email: raw?.email || '', name: raw?.displayName || raw?.email || '' })
+  return {
+    ...base,
+    ...raw,
+    email: normalizeEmail(raw?.email || base.email),
+    displayName: String(raw?.displayName || base.displayName || raw?.email || '').trim(),
+    permissions: { ...base.permissions, ...(raw?.permissions || {}) },
+  }
+}
+
+function dateOnly(value: unknown): string {
+  if (!value) return ''
+  const date = value instanceof Date ? value : new Date(String(value))
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10)
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function friendlyFirebaseError(error: any): Error {
+  const code = String(error?.code || '')
+  if (code.includes('permission-denied')) return new Error('Firebase blocked this action because your account does not have permission.')
+  if (code.includes('unavailable')) return new Error('Firebase is temporarily unavailable. Check your internet connection and try again.')
+  if (code.includes('failed-precondition')) return new Error('Firebase needs an index or setup change for this action. Contact Junior.')
+  return error instanceof Error ? error : new Error('The Firebase request could not be completed.')
+}
+
+export function getFriendlyApiError(error: unknown): string {
+  return friendlyFirebaseError(error).message
+}
+
+export function requiresNewLogin(_error: unknown): boolean { return false }
+
+export async function bootstrap(session: AuthSession): Promise<BootstrapResponse> {
+  try {
+    const email = normalizeEmail(session.email)
+    const userSnap = await firestore.collection('users').doc(email).get()
+    const fallback = viewerFromSession(session)
+    const storedUser = userSnap.exists ? sanitizeUser(userSnap.data(), fallback) : fallback
+
+    // Junior is always the owner, even if a document was accidentally damaged.
+    const user: QaUser = email === OWNER_EMAIL
+      ? { ...storedUser, email, displayName: storedUser.displayName || 'Junior', role: 'admin', active: true, guidedMode: false, permissions: { canSubmitReviews: true, canViewHistory: true, canEditAgentDetails: true, canEditCriteriaSelections: true, canEditCustomNotes: true } }
+      : storedUser
+
+    if (!user.active) throw new Error('This QA app account is blocked. Contact Junior or Barbara.')
+
+    const settingsSnap = await firestore.collection('settings').doc('main').get()
+    const settings = settingsSnap.exists ? { ...DEFAULT_SETTINGS, ...settingsSnap.data() } as AppSettings : DEFAULT_SETTINGS
+
+    let users: QaUser[] = [user]
+    if (user.role === 'admin' && ADMIN_EMAILS.has(email)) {
+      const usersSnap = await firestore.collection('users').get()
+      users = usersSnap.docs.map((doc: any) => sanitizeUser(doc.data())).filter((item: QaUser) => Boolean(item.email))
+      if (!users.some((item) => normalizeEmail(item.email) === OWNER_EMAIL)) users.unshift(user)
+    }
+
+    return { success: true, user, users, settings }
+  } catch (error) {
+    throw friendlyFirebaseError(error)
+  }
+}
+
+export async function fetchReviews(_session: AuthSession, _refresh = false): Promise<ReviewRecord[]> {
+  try {
+    const snapshot = await firestore.collection('reviews').orderBy('savedTimestamp', 'desc').get()
+    return snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as ReviewRecord))
+  } catch (error: any) {
+    // During first setup, an empty collection can be read without an index issue.
+    throw friendlyFirebaseError(error)
+  }
+}
+
+function calculateReview(review: ReviewDraft, settings: AppSettings, actor: QaUser): ReviewRecord {
+  if (!actor.permissions.canSubmitReviews) throw new Error('Your account cannot submit QA reviews.')
+  if (!review.agentStartDate) throw new Error('Add the agent start date.')
+  if (!review.agentName.trim()) throw new Error('Add the agent name.')
+  if (!settings.callCenters.includes(review.callCenter)) throw new Error('Select a valid call center.')
+  if (settings.rules.callIdRequired && !review.callId.trim()) throw new Error('Add the Call ID.')
+  if (settings.rules.confirmationRequired && review.confirmationNumber.trim().length < 2) throw new Error('Add an itinerary, confirmation number, reservation number, or booking reference.')
+  if (!review.callLength.trim()) throw new Error('Add the call length.')
+  if (!review.callDate) throw new Error('Add the date of the call.')
+  if (actor.guidedMode && !(new RegExp(settings.rules.guidedCallIdPattern)).test(review.callId.trim())) throw new Error('The Call ID does not match the Guided Mode format.')
+
+  let finalScore = 0
+  let markdowns = 0
+  const criteria: CriterionAnswer[] = settings.criteria[review.qaType].map((definition, index) => {
+    const answer = review.criteria.find((item) => Number(item.number) === Number(definition.number)) || review.criteria[index]
+    const status = answer?.status || ''
+    if (!settings.statusOptions.includes(status as any)) throw new Error(`Select a status for criterion ${definition.number}: ${definition.name}.`)
+    const customNote = String(answer?.customNote || '').trim()
+    if (settings.rules.noteRequiredForMarkdownOrPartial && (status === '✕ Markdown' || status === 'Partial') && !customNote) throw new Error(`Add a clear note for criterion ${definition.number} because ${status} was selected.`)
+    if (!actor.permissions.canEditCustomNotes && customNote) throw new Error('Your account cannot add custom notes.')
+    const autoPoints = status === '✓ Followed' || status === 'N/A' ? definition.points : status === 'Partial' ? definition.points / 2 : 0
+    if (status === '✕ Markdown') markdowns += 1
+    finalScore += autoPoints
+    return { ...definition, status, partialPoints: status === 'Partial' ? definition.points / 2 : 0, autoPoints, customNote }
+  })
+
+  const kpiTarget = review.qaType === 'Groups' ? settings.rules.groupsKpi : settings.rules.csKpi
+  const result = finalScore >= kpiTarget ? 'PASS' : 'FAIL'
+  const now = new Date().toISOString()
+  return {
+    id: review.requestId || `review-${Date.now()}`,
+    rowNumber: 0,
+    savedTimestamp: now,
+    agentStartDate: dateOnly(review.agentStartDate),
+    reviewDate: dateOnly(review.todayDate || now),
+    evaluator: actor.role === 'admin' ? review.evaluator : actor.displayName,
+    agentName: review.agentName.trim(),
+    callCenter: review.callCenter,
+    callId: review.callId.trim().replace(/\s+/g, ''),
+    itineraryNumber: review.confirmationNumber.trim(),
+    emailSent: false,
+    qaType: review.qaType,
+    finalScore,
+    kpiTarget,
+    result,
+    markdowns,
+    issueSummary: criteria.filter((item) => item.customNote).map((item) => `${item.name} - ${item.status} - ${item.customNote}`).join(' | '),
+    callLength: review.callLength.trim(),
+    callDate: dateOnly(review.callDate),
+    criteria,
+  }
+}
+
+async function nextRowNumber(): Promise<number> {
+  const counterRef = firestore.collection('meta').doc('reviews')
+  return firestore.runTransaction(async (transaction: any) => {
+    const snap = await transaction.get(counterRef)
+    const next = Math.max(2, Number(snap.data()?.nextRowNumber || 2))
+    transaction.set(counterRef, { nextRowNumber: next + 1, updatedAt: new Date().toISOString() }, { merge: true })
+    return next
+  })
+}
+
+export async function saveReview(session: AuthSession, review: ReviewDraft): Promise<ApiResponse> {
+  try {
+    const boot = await bootstrap(session)
+    const record = calculateReview(review, boot.settings, boot.user)
+    record.rowNumber = await nextRowNumber()
+    const docId = review.requestId || `review-${record.rowNumber}-${Date.now()}`
+    record.id = docId
+    await firestore.collection('reviews').doc(docId).set({ ...record, createdByEmail: normalizeEmail(session.email), createdByUid: session.uid || '' })
+    await addAudit('REVIEW SAVED', session, '', { reviewId: docId, rowNumber: record.rowNumber, evaluator: record.evaluator, agentName: record.agentName, finalScore: record.finalScore })
+    return { success: true, message: `Review saved to Firebase (review row ${record.rowNumber}).`, review: record }
+  } catch (error) { throw friendlyFirebaseError(error) }
+}
+
+function normalizeSavedUser(user: QaUser, actorEmail: string): QaUser {
+  const email = normalizeEmail(user.email)
+  if (email === OWNER_EMAIL) {
+    return { ...user, email, role: 'admin', active: true, guidedMode: false, permissions: { canSubmitReviews: true, canViewHistory: true, canEditAgentDetails: true, canEditCriteriaSelections: true, canEditCustomNotes: true } }
+  }
+  if (email === BARBARA_EMAIL && actorEmail === BARBARA_EMAIL) {
+    return { ...user, email, role: 'admin', active: true, guidedMode: false, permissions: { canSubmitReviews: true, canViewHistory: true, canEditAgentDetails: true, canEditCriteriaSelections: true, canEditCustomNotes: true } }
+  }
+  if (user.role === 'admin' && email !== BARBARA_EMAIL) throw new Error('Only Junior and Barbara can be administrators.')
+  return { ...user, email }
+}
+
+export async function saveUser(session: AuthSession, user: QaUser): Promise<ApiResponse<QaUser>> {
+  try {
+    const actor = normalizeEmail(session.email)
+    const target = normalizeEmail(user.email)
+    if (!ADMIN_EMAILS.has(actor)) throw new Error('Only Junior or Barbara can perform this admin action.')
+    if (actor === BARBARA_EMAIL && target === OWNER_EMAIL) throw new Error("Junior is the owner account. Barbara can't edit, block, demote, delete, or change Junior's permissions.")
+    const saved = normalizeSavedUser({ ...user, email: target, updatedAt: new Date().toISOString(), updatedBy: actor }, actor)
+    if (target === OWNER_EMAIL && actor !== OWNER_EMAIL) throw new Error("Junior is the owner account. This account can't be changed by Barbara.")
+    await firestore.collection('users').doc(target).set(saved, { merge: true })
+    await addAudit('USER UPSERTED', session, target, saved)
+    return { success: true, message: `${saved.displayName} was saved.`, user: saved }
+  } catch (error) { throw friendlyFirebaseError(error) }
+}
+
+export async function setUserBlocked(session: AuthSession, email: string, blocked: boolean): Promise<ApiResponse> {
+  try {
+    const actor = normalizeEmail(session.email)
+    const target = normalizeEmail(email)
+    if (!ADMIN_EMAILS.has(actor)) throw new Error('Only Junior or Barbara can perform this admin action.')
+    if (target === OWNER_EMAIL && actor !== OWNER_EMAIL) throw new Error("Junior is the owner account. Barbara can't block, delete, or disable Junior.")
+    if (target === OWNER_EMAIL) throw new Error("Junior is the owner account and can't be blocked.")
+    if (target === BARBARA_EMAIL && actor !== OWNER_EMAIL) throw new Error('Only Junior can block or change Barbara’s administrator account.')
+    await firestore.collection('users').doc(target).set({ active: !blocked, updatedAt: new Date().toISOString(), updatedBy: actor }, { merge: true })
+    await addAudit(blocked ? 'USER BLOCKED' : 'USER UNBLOCKED', session, target, {})
+    return { success: true, message: `Account ${blocked ? 'blocked' : 'unblocked'}.` }
+  } catch (error) { throw friendlyFirebaseError(error) }
+}
+
+export async function saveSettings(session: AuthSession, settings: AppSettings): Promise<ApiResponse<AppSettings>> {
+  try {
+    if (!ADMIN_EMAILS.has(normalizeEmail(session.email))) throw new Error('Only Junior or Barbara can change QA settings.')
+    await firestore.collection('settings').doc('main').set({ ...settings, updatedAt: new Date().toISOString(), updatedBy: normalizeEmail(session.email) })
+    await addAudit('SETTINGS UPDATED', session, '', {})
+    return { success: true, message: 'QA settings were saved to Firebase.', settings }
+  } catch (error) { throw friendlyFirebaseError(error) }
+}
+
+export async function markReviewEmailSent(session: AuthSession, review: ReviewRecord, sent: boolean): Promise<ApiResponse<ReviewRecord>> {
+  try {
+    if (!ADMIN_EMAILS.has(normalizeEmail(session.email))) throw new Error('Only Junior or Barbara can change the email-sent status.')
+    const patch = { emailSent: sent, emailSentAt: sent ? new Date().toISOString() : '', emailSentBy: sent ? session.name : '', updatedAt: new Date().toISOString() }
+    await firestore.collection('reviews').doc(review.id).update(patch)
+    return { success: true, message: `Email marked ${sent ? 'sent' : 'not sent'}.`, review: { ...review, ...patch } }
+  } catch (error) { throw friendlyFirebaseError(error) }
+}
+
+async function addAudit(action: string, session: AuthSession, targetEmail: string, details: unknown) {
+  try {
+    await firestore.collection('auditLogs').add({ action, actorEmail: normalizeEmail(session.email), actorName: session.name, targetEmail: normalizeEmail(targetEmail), details, createdAt: new Date().toISOString() })
+  } catch (error) { console.warn('Audit log write failed.', error) }
+}
+
+export async function updatePresence(session: AuthSession, currentPage: string, sessionId: string): Promise<PresenceUser | null> {
+  if (!session.uid) return null
+  const userSnap = await firestore.collection('users').doc(normalizeEmail(session.email)).get().catch(() => null)
+  const role = userSnap?.exists ? String(userSnap.data()?.role || 'viewer') : 'viewer'
+  const presence: PresenceUser = { email: normalizeEmail(session.email), displayName: session.name || session.email, role, currentPage, lastSeen: new Date().toISOString(), sessionId, online: true }
+  await realtimeDb.ref(`presence/${session.uid}`).set(presence)
+  realtimeDb.ref(`presence/${session.uid}`).onDisconnect().remove().catch(() => undefined)
+  return presence
+}
+
+export async function getPresence(_session: AuthSession): Promise<PresenceUser[]> {
+  const snapshot = await realtimeDb.ref('presence').once('value')
+  const values = snapshot.val() || {}
+  const cutoff = Date.now() - 120000
+  return Object.values(values).map((item: any) => ({ ...item, online: new Date(item.lastSeen || 0).getTime() >= cutoff })) as PresenceUser[]
+}
+
+export async function removePresence(session: AuthSession, _sessionId: string): Promise<void> {
+  if (session.uid) await realtimeDb.ref(`presence/${session.uid}`).remove()
+}
+
+export async function createQaBackup(_session: AuthSession): Promise<ApiResponse> {
+  return { success: true, message: 'Use “Download Full Google-Sheet Style” in Review History for a complete offline backup.' }
+}
+
+export async function restoreLatestQaBackup(_session: AuthSession): Promise<ApiResponse> {
+  return { success: false, message: 'Automatic Google Sheet restore was removed. Use the Legacy Firebase Import in Admin Control to restore/import an Excel workbook safely.' }
+}
+
+// Kept for compatibility with old imports. Client-side Excel export no longer calls a backend.
+export async function exportReviewsWorkbook(): Promise<{ filename: string; base64: string }> {
+  throw new Error('Server-side export was removed. Use the browser Excel export buttons.')
+}

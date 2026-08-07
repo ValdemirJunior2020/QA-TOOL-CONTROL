@@ -197,27 +197,8 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
     try {
       await onSave(value)
       resetReviewForm(value.qaType)
-    } catch (error) {
+    } catch {
       setShowChecklist(false)
-
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'The server did not confirm the save.'
-
-      const mayHaveSaved =
-        message.includes('502') ||
-        message.includes('504') ||
-        message.toLowerCase().includes('unreadable response')
-
-      if (
-        mayHaveSaved &&
-        window.confirm(
-          'The server did not confirm the response, but the review may already be saved in Agents Reviewed. Clear the form now?',
-        )
-      ) {
-        resetReviewForm(value.qaType)
-      }
     }
   }
 
@@ -448,7 +429,7 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
         <div className="save-bar">
           <div>
             <strong>Ready to save?</strong>
-            <span>The review will be added to the existing Agents Reviewed tab.</span>
+            <span>The review will be saved directly to Firebase and included in both Excel export formats.</span>
           </div>
           <button type="button" className="primary-button save-button" onClick={prepareSubmit} disabled={saving}>
             {saving ? 'Saving Review…' : 'Save Review'}

@@ -169,27 +169,15 @@ export function Shell({
             </span>
           </a>
 
-          <a
-            href="https://docs.google.com/spreadsheets/d/1GpR3siePgY45jGJfsAB2Q1obCW34A-tfKJOrI8ruEwg/edit?gid=357052052#gid=357052052"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="sidebar-tool-button sheet-button"
-          >
-            <span>Open Google Sheet</span>
-            <span className="external-arrow" aria-hidden="true">
-              ↗
-            </span>
-          </a>
-
-          <a
-            href="https://docs.google.com/spreadsheets/d/1GpR3siePgY45jGJfsAB2Q1obCW34A-tfKJOrI8ruEwg/export?format=xlsx"
+          <button
+            type="button"
             className="sidebar-tool-button download-excel-button"
+            onClick={() => onNavigate('history')}
           >
-            <span>Download Reviews Excel</span>
-            <span className="external-arrow" aria-hidden="true">
-              ↓
-            </span>
-          </a>
+            <span>Firebase Excel Downloads</span>
+            <span className="external-arrow" aria-hidden="true">↓</span>
+          </button>
+
         </nav>
 
         <section

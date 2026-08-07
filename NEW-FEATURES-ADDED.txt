@@ -1,21 +1,20 @@
-QA Control Center update
+QA Control Center — Firebase migration
 
-Added:
-1. Duplicate review protection using a unique Request ID.
-2. Automatic browser draft saving and recovery.
-3. Clear save confirmation through the existing success toast and saved row response.
-4. Guided Mode progress indicators and final checklist.
-5. Expanded dashboard metrics and reports.
-6. Advanced Review History filters.
-7. Filtered CSV export and Agents Reviewed-only XLSX export.
-8. Admin backup creation and restore-latest-backup controls.
-9. Email sent / not sent controls in Review History.
-10. Every email status change updates Agents Reviewed and appends a log row to Emails Sent Details.
+Added / preserved:
+1. Firebase Google Authentication with persistent browser sessions.
+2. Cloud Firestore as the live QA review/settings/user database.
+3. Firebase Realtime Database for live presence.
+4. Any Google account can sign in as a viewer; only approved active evaluators/admins can submit reviews.
+5. Junior is the protected owner account. Barbara cannot edit, demote, block, delete, or change Junior.
+6. Junior can fully manage Barbara's access.
+7. Junior-only legacy XLSX importer for Agents Reviewed, users, settings, criteria, custom notes, scores, call details, and email status.
+8. Stable legacy IDs so re-importing the same workbook updates instead of duplicating the same rows.
+9. Existing organized Team Report XLSX export preserved.
+10. Full Agents Reviewed Google-Sheet-style XLSX export added.
+11. Percentage progress UI for loading, saving, refreshing, permissions/settings changes, imports, and Excel generation.
+12. Duplicate review protection through Request ID/document ID.
+13. Browser draft saving and recovery preserved.
+14. Guided Mode, history filters, Email Sent controls, dashboard reports, and live presence preserved.
+15. Netlify Function, live Apps Script dependency, and local Node API removed.
 
-Important deployment step:
-Copy the updated apps-script/ReactQaApi.gs into the existing Apps Script project and create a new deployment version. Keep the same Script Properties and environment values.
-
-Safety:
-The .env file was not modified.
-The .git directory and current Git HEAD were preserved.
-Existing sheet rows are not deleted by setup. Restore requires an admin confirmation in the React app.
+Git metadata is preserved. The .env file remains ignored by Git; .env.example is safe to commit.

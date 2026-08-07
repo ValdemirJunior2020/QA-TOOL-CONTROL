@@ -1,11 +1,15 @@
-1. Read README.md.
-2. Add apps-script/ReactQaApi.gs as a NEW file in your existing Apps Script project.
-3. Run qaAppSetup once.
-4. Update the existing Apps Script Web App deployment to a new version.
-5. Paste your existing /exec URL into .env and Netlify.
-6. Add the same Google Web OAuth client ID to VITE_GOOGLE_CLIENT_ID and GOOGLE_CLIENT_ID.
-7. Run npm install.
-8. For local test buttons only, set VITE_ENABLE_DEV_LOGIN=true and ALLOW_DEV_BYPASS=true.
-9. Run npm run dev.
+QA CONTROL CENTER — FIREBASE VERSION
 
-The uploaded message did not include the exact /exec URL, so it is the only value that still needs to be pasted into .env.
+1. Read FIREBASE-MIGRATION-README.md.
+2. In Firebase Authentication, enable Google sign-in.
+3. Add your Netlify production domain and any custom domain to Firebase Authentication -> Authorized domains.
+4. Create/enable Cloud Firestore and Realtime Database in project psych-support-app.
+5. Deploy firestore.rules and database.rules.json to that Firebase project.
+6. Run: npm install
+7. Run: npm run check
+8. Run: npm run build
+9. Push this Git repo normally; Netlify builds the Vite app from the repo.
+10. Sign in as Junior and use Admin Control -> Legacy Firebase Import to import QA-Tool (16).xlsx once.
+
+The live app does NOT need Google Apps Script, a Google Sheet, a Netlify Function, or a Node API.
+The old Apps Script source is preserved under legacy-google-apps-script/ only for reference.
