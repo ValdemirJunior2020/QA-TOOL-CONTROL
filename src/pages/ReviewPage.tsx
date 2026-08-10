@@ -7,12 +7,15 @@ import type {
   QaType,
   QaUser,
   ReviewDraft,
+  WatchListAgent,
 } from '../types'
+import { findActiveWatchAgent } from '../lib/watchList'
 
 interface ReviewPageProps {
   user: QaUser
   settings: AppSettings
   evaluators: QaUser[]
+  watchListAgents: WatchListAgent[]
   onSave: (review: ReviewDraft) => Promise<void>
   saving: boolean
 }
@@ -77,7 +80,7 @@ function validateReview(review: ReviewDraft, user: QaUser, settings: AppSettings
   return { errors, fieldErrors }
 }
 
-export function ReviewPage({ user, settings, evaluators, onSave, saving }: ReviewPageProps) {
+export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave, saving }: ReviewPageProps) {
   const [review, setReview] = useState<ReviewDraft>(() => createReviewDraft(settings, user.displayName))
   const [validation, setValidation] = useState<ValidationState>({ errors: [], fieldErrors: {} })
   const [showChecklist, setShowChecklist] = useState(false)
@@ -120,6 +123,7 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
   const kpi = review.qaType === 'Groups' ? settings.rules.groupsKpi : settings.rules.csKpi
   const result = score >= kpi ? 'PASS' : 'FAIL'
   const markdowns = review.criteria.filter((criterion) => criterion.status === '✕ Markdown').length
+  const watchListMatch = useMemo(() => findActiveWatchAgent(review.agentName, watchListAgents, review.callCenter), [review.agentName, review.callCenter, watchListAgents])
 
   const updateField = <K extends keyof ReviewDraft>(field: K, value: ReviewDraft[K]) => {
     setReview((current) => ({ ...current, [field]: value }))
@@ -322,6 +326,12 @@ export function ReviewPage({ user, settings, evaluators, onSave, saving }: Revie
                 disabled={!user.permissions.canEditAgentDetails}
               />
               {validation.fieldErrors.agentName && <small>{validation.fieldErrors.agentName}</small>}
+              {watchListMatch && (
+                <div className="watch-agent-warning" role="status">
+                  <strong>👁 WATCH LIST AGENT</strong>
+                  <span>{watchListMatch.wave}{watchListMatch.trainer ? ` · Trainer: ${watchListMatch.trainer}` : ''}</span>
+                </div>
+              )}
             </label>
 
             <label className={validation.fieldErrors.callCenter ? 'field invalid' : 'field'}>

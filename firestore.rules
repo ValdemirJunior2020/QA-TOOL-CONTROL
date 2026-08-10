@@ -79,6 +79,12 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /watchListAgents/{agentId} {
+      allow read: if signedIn();
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

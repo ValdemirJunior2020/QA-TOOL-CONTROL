@@ -1,5 +1,6 @@
-import type { ApiResponse, AppSettings, AuthSession, BootstrapResponse, CriterionAnswer, QaUser, ReviewDraft, ReviewRecord } from '../types'
+import type { ApiResponse, AppSettings, AuthSession, BootstrapResponse, CriterionAnswer, QaUser, ReviewDraft, ReviewRecord, WatchListAgent, WatchListAgentInput, WatchListStatus } from '../types'
 import { DEFAULT_SETTINGS } from '../data/defaults'
+import { STARTER_WATCH_LIST } from '../data/watchListSeed'
 import { ADMIN_EMAILS, BARBARA_EMAIL, OWNER_EMAIL, firestore, normalizeEmail, realtimeDb } from './firebase'
 
 export interface PresenceUser {
@@ -280,3 +281,166 @@ export async function restoreLatestQaBackup(_session: AuthSession): Promise<ApiR
 export async function exportReviewsWorkbook(): Promise<{ filename: string; base64: string }> {
   throw new Error('Server-side export was removed. Use the browser Excel export buttons.')
 }
+
+function normalizeAgentName(value: unknown): string {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+}
+
+function sanitizeWatchListAgent(id: string, raw: any): WatchListAgent {
+  return {
+    id,
+    callCenter: String(raw?.callCenter || '').trim(),
+    lob: String(raw?.lob || '').trim(),
+    agentName: String(raw?.agentName || '').trim(),
+    trainer: String(raw?.trainer || '').trim(),
+    wave: String(raw?.wave || '').trim(),
+    startDate: dateOnly(raw?.startDate),
+    endDate: dateOnly(raw?.endDate),
+    employeeStatus: String(raw?.employeeStatus || '').trim(),
+    reason: String(raw?.reason || '').trim(),
+    manualQaScore: raw?.manualQaScore === null || raw?.manualQaScore === undefined || raw?.manualQaScore === '' ? null : Number(raw.manualQaScore),
+    manualReviewCount: raw?.manualReviewCount === null || raw?.manualReviewCount === undefined || raw?.manualReviewCount === '' ? null : Math.max(0, Math.trunc(Number(raw.manualReviewCount))),
+    watchStatus: (['Active', 'Cleared', 'Removed'].includes(String(raw?.watchStatus)) ? raw.watchStatus : 'Active') as WatchListStatus,
+    createdAt: String(raw?.createdAt || ''),
+    createdBy: normalizeEmail(raw?.createdBy || ''),
+    createdByName: String(raw?.createdByName || raw?.createdBy || ''),
+    updatedAt: String(raw?.updatedAt || ''),
+    updatedBy: normalizeEmail(raw?.updatedBy || ''),
+    updatedByName: String(raw?.updatedByName || raw?.updatedBy || ''),
+    clearedAt: String(raw?.clearedAt || ''),
+    clearedBy: normalizeEmail(raw?.clearedBy || ''),
+    clearedByName: String(raw?.clearedByName || raw?.clearedBy || ''),
+  }
+}
+
+function assertWatchListAdmin(session: AuthSession) {
+  if (!ADMIN_EMAILS.has(normalizeEmail(session.email))) {
+    throw new Error('Only Junior or Barbara can add, edit, remove, or restore Watch List agents.')
+  }
+}
+
+export async function fetchWatchListAgents(_session: AuthSession): Promise<WatchListAgent[]> {
+  try {
+    const snapshot = await firestore.collection('watchListAgents').get()
+    return snapshot.docs
+      .map((doc: any) => sanitizeWatchListAgent(doc.id, doc.data()))
+      .sort((a: WatchListAgent, b: WatchListAgent) => {
+        if (a.watchStatus === 'Active' && b.watchStatus !== 'Active') return -1
+        if (a.watchStatus !== 'Active' && b.watchStatus === 'Active') return 1
+        return a.agentName.localeCompare(b.agentName)
+      })
+  } catch (error) {
+    throw friendlyFirebaseError(error)
+  }
+}
+
+export async function seedStarterWatchList(session: AuthSession): Promise<boolean> {
+  try {
+    assertWatchListAdmin(session)
+    const snapshot = await firestore.collection('watchListAgents').limit(1).get()
+    if (!snapshot.empty) return false
+
+    const batch = firestore.batch()
+    const now = new Date().toISOString()
+    STARTER_WATCH_LIST.forEach((agent, index) => {
+      const ref = firestore.collection('watchListAgents').doc(`starter-${String(index + 1).padStart(2, '0')}`)
+      batch.set(ref, {
+        ...agent,
+        normalizedName: normalizeAgentName(agent.agentName),
+        watchStatus: 'Active',
+        createdAt: now,
+        createdBy: normalizeEmail(session.email),
+        createdByName: session.name || session.email,
+        updatedAt: now,
+        updatedBy: normalizeEmail(session.email),
+        updatedByName: session.name || session.email,
+      })
+    })
+    await batch.commit()
+    await addAudit('WATCH LIST STARTER IMPORTED', session, '', { count: STARTER_WATCH_LIST.length })
+    return true
+  } catch (error) {
+    throw friendlyFirebaseError(error)
+  }
+}
+
+export async function saveWatchListAgent(session: AuthSession, input: WatchListAgentInput, id?: string): Promise<WatchListAgent> {
+  try {
+    assertWatchListAdmin(session)
+    if (!input.agentName.trim()) throw new Error('Agent name is required.')
+    if (!input.callCenter.trim()) throw new Error('Call center is required.')
+    if (!input.trainer.trim()) throw new Error('Trainer name is required.')
+    if (!input.wave.trim()) throw new Error('Wave is required.')
+
+    const normalizedName = normalizeAgentName(input.agentName)
+    const existing = await firestore.collection('watchListAgents').where('normalizedName', '==', normalizedName).get()
+    const duplicate = existing.docs.find((doc: any) => doc.id !== id && String(doc.data()?.watchStatus || 'Active') === 'Active')
+    if (duplicate) throw new Error(`${input.agentName.trim()} is already on the active Watch List.`)
+
+    const now = new Date().toISOString()
+    const actor = normalizeEmail(session.email)
+    const ref = id ? firestore.collection('watchListAgents').doc(id) : firestore.collection('watchListAgents').doc()
+    const previous = id ? await ref.get() : null
+    const previousData = previous?.exists ? previous.data() : null
+    const nextWatchStatus = input.watchStatus || previousData?.watchStatus || 'Active'
+    const statusMovedToHistory = nextWatchStatus === 'Cleared' || nextWatchStatus === 'Removed'
+    const payload = {
+      ...input,
+      callCenter: input.callCenter.trim(),
+      agentName: input.agentName.trim(),
+      trainer: input.trainer.trim(),
+      normalizedName,
+      watchStatus: nextWatchStatus,
+      manualQaScore: input.manualQaScore === null || input.manualQaScore === undefined || Number.isNaN(Number(input.manualQaScore)) ? null : Math.max(0, Math.min(100, Number(input.manualQaScore))),
+      manualReviewCount: input.manualReviewCount === null || input.manualReviewCount === undefined || Number.isNaN(Number(input.manualReviewCount)) ? null : Math.max(0, Math.trunc(Number(input.manualReviewCount))),
+      createdAt: previousData?.createdAt || now,
+      createdBy: previousData?.createdBy || actor,
+      createdByName: previousData?.createdByName || session.name || session.email,
+      updatedAt: now,
+      updatedBy: actor,
+      updatedByName: session.name || session.email,
+      clearedAt: statusMovedToHistory ? (previousData?.clearedAt || now) : '',
+      clearedBy: statusMovedToHistory ? (previousData?.clearedBy || actor) : '',
+      clearedByName: statusMovedToHistory ? (previousData?.clearedByName || session.name || session.email) : '',
+    }
+    await ref.set(payload, { merge: true })
+    await addAudit(id ? 'WATCH LIST AGENT UPDATED' : 'WATCH LIST AGENT ADDED', session, '', { agentId: ref.id, agentName: payload.agentName })
+    return sanitizeWatchListAgent(ref.id, payload)
+  } catch (error) {
+    throw friendlyFirebaseError(error)
+  }
+}
+
+export async function setWatchListAgentStatus(session: AuthSession, agent: WatchListAgent, status: WatchListStatus): Promise<WatchListAgent> {
+  try {
+    assertWatchListAdmin(session)
+    const now = new Date().toISOString()
+    const actor = normalizeEmail(session.email)
+    const patch: Record<string, string> = {
+      watchStatus: status,
+      updatedAt: now,
+      updatedBy: actor,
+      updatedByName: session.name || session.email,
+    }
+    if (status === 'Cleared' || status === 'Removed') {
+      patch.clearedAt = now
+      patch.clearedBy = actor
+      patch.clearedByName = session.name || session.email
+    } else {
+      patch.clearedAt = ''
+      patch.clearedBy = ''
+      patch.clearedByName = ''
+    }
+    await firestore.collection('watchListAgents').doc(agent.id).update(patch)
+    await addAudit(`WATCH LIST AGENT ${status.toUpperCase()}`, session, '', { agentId: agent.id, agentName: agent.agentName })
+    return { ...agent, ...patch, watchStatus: status }
+  } catch (error) {
+    throw friendlyFirebaseError(error)
+  }
+}
+

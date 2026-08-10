@@ -2,14 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { GoogleSignIn } from './components/GoogleSignIn'
 import { Shell, type AppPage } from './components/Shell'
 import { DEFAULT_SETTINGS } from './data/defaults'
-import { bootstrap, createQaBackup, fetchReviews, getPresence, markReviewEmailSent, removePresence, restoreLatestQaBackup, saveReview, saveSettings, saveUser, setUserBlocked, updatePresence, type PresenceUser } from './lib/api'
+import { bootstrap, createQaBackup, fetchReviews, fetchWatchListAgents, getPresence, markReviewEmailSent, removePresence, restoreLatestQaBackup, saveReview, saveSettings, saveUser, saveWatchListAgent, seedStarterWatchList, setUserBlocked, setWatchListAgentStatus, updatePresence, type PresenceUser } from './lib/api'
 import { signOutFirebase, waitForFirebaseSession } from './lib/auth'
 import { AdminPage } from './pages/AdminPage'
 import { importLegacyWorkbookToFirebase } from './lib/importLegacyWorkbook'
 import { DashboardPage } from './pages/DashboardPage'
 import { ReviewPage } from './pages/ReviewPage'
 import { ReviewsPage } from './pages/ReviewsPage'
-import type { AppSettings, AuthSession, QaUser, ReviewDraft, ReviewRecord } from './types'
+import { WatchListPage } from './pages/WatchListPage'
+import type { AppSettings, AuthSession, QaUser, ReviewDraft, ReviewRecord, WatchListAgent, WatchListAgentInput, WatchListStatus } from './types'
 
 interface ToastState {
   type: 'success' | 'error' | 'info'
@@ -65,6 +66,7 @@ function getPresencePageLabel(page: AppPage): string {
   const labels: Record<AppPage, string> = {
     dashboard: 'Dashboard',
     review: 'New Review',
+    watchlist: 'Watch List',
     history: 'Review History',
     admin: 'Admin Control',
   }
@@ -116,6 +118,7 @@ export default function App() {
   const [users, setUsers] = useState<QaUser[]>([])
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
   const [reviews, setReviews] = useState<ReviewRecord[]>([])
+  const [watchListAgents, setWatchListAgents] = useState<WatchListAgent[]>([])
   const [activePage, setActivePage] = useState<AppPage>('dashboard')
   const [loading, setLoading] = useState(true)
   const [loadingPercent, setLoadingPercent] = useState(10)
@@ -131,6 +134,13 @@ export default function App() {
   const showToast = useCallback((message: string, type: ToastState['type'] = 'info') => {
     setToast({ message, type })
     window.setTimeout(() => setToast(null), 5000)
+  }, [])
+
+  const handleNavigate = useCallback((page: AppPage) => {
+    setActivePage(page)
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+    })
   }, [])
 
   useEffect(() => {
@@ -159,14 +169,32 @@ export default function App() {
       const boot = await bootstrap(activeSession)
       setLoadingPercent(55)
       const reviewRows = await fetchReviews(activeSession)
-      setLoadingPercent(90)
+      setLoadingPercent(72)
       if (!boot.success || !boot.user) throw new Error(boot.message || 'Your account could not be loaded.')
+
+      let watchRows: WatchListAgent[] = []
+      try {
+        watchRows = await fetchWatchListAgents(activeSession)
+        if (watchRows.length === 0 && (boot.user.email === 'infojr.83@gmail.com' || boot.user.email === 'barbara.kalchik8reserve@gmail.com')) {
+          try {
+            const seeded = await seedStarterWatchList(activeSession)
+            if (seeded) watchRows = await fetchWatchListAgents(activeSession)
+          } catch (error) {
+            console.warn('Starter Watch List import could not run.', error)
+          }
+        }
+      } catch (error) {
+        // Keep the existing QA app usable even if the new Watch List rules have not been deployed yet.
+        console.warn('Watch List could not be loaded. Existing QA features will continue to work.', error)
+      }
+      setLoadingPercent(90)
       if (!boot.user.active) throw new Error('Your QA app account is blocked. Contact Junior or Barbara.')
 
       setCurrentUser(boot.user)
       setUsers(boot.users || [boot.user])
       setSettings(boot.settings || DEFAULT_SETTINGS)
       setReviews(reviewRows)
+      setWatchListAgents(watchRows)
       setLoadingPercent(100)
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'The app could not be loaded.'
@@ -296,6 +324,7 @@ export default function App() {
     setCurrentUser(null)
     setUsers([])
     setReviews([])
+    setWatchListAgents([])
     setPresenceUsers([])
     setActivePage('dashboard')
     activePageRef.current = 'dashboard'
@@ -307,9 +336,15 @@ export default function App() {
     setRefreshing(true)
     setOperationProgress({ percent: 15, label: 'Refreshing reviews from Firebase' })
     try {
-      setReviews(await fetchReviews(session, force))
-      setOperationProgress({ percent: 100, label: 'Firebase reviews refreshed' })
-      showToast('Review data refreshed from Firebase.', 'success')
+      const freshReviews = await fetchReviews(session, force)
+      setReviews(freshReviews)
+      try {
+        setWatchListAgents(await fetchWatchListAgents(session))
+      } catch (error) {
+        console.warn('Watch List refresh failed without interrupting review refresh.', error)
+      }
+      setOperationProgress({ percent: 100, label: 'Firebase reviews and Watch List refreshed' })
+      showToast('Review and Watch List data refreshed from Firebase.', 'success')
     } catch (caught) {
       showToast(caught instanceof Error ? caught.message : 'Refresh failed.', 'error')
     } finally {
@@ -328,7 +363,7 @@ export default function App() {
       if (!response.success) throw new Error(response.message || 'The review was not saved.')
       showToast(response.message || 'Review saved to Firebase.', 'success')
       await refreshReviews(true)
-      setActivePage('dashboard')
+      handleNavigate('dashboard')
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'The review was not saved.'
       showToast(message, 'error')
@@ -447,6 +482,45 @@ export default function App() {
     showToast(response.message || 'Backup created.', 'success')
   }
 
+  const refreshWatchList = async () => {
+    if (!session) return
+    try {
+      setWatchListAgents(await fetchWatchListAgents(session))
+    } catch (caught) {
+      showToast(caught instanceof Error ? caught.message : 'Watch List refresh failed.', 'error')
+    }
+  }
+
+  const handleSaveWatchListAgent = async (input: WatchListAgentInput, id?: string) => {
+    if (!session) return
+    setBusy(true)
+    try {
+      await saveWatchListAgent(session, input, id)
+      await refreshWatchList()
+      showToast(id ? 'Watch List agent updated.' : 'Agent added to the Watch List.', 'success')
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : 'The Watch List agent could not be saved.'
+      showToast(message, 'error')
+      throw caught
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleWatchListStatus = async (agent: WatchListAgent, status: WatchListStatus) => {
+    if (!session) return
+    setBusy(true)
+    try {
+      await setWatchListAgentStatus(session, agent, status)
+      await refreshWatchList()
+      showToast(status === 'Active' ? `${agent.agentName} restored to the Watch List.` : `${agent.agentName} moved to Watch List history.`, 'success')
+    } catch (caught) {
+      showToast(caught instanceof Error ? caught.message : 'Watch List status could not be changed.', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const handleRestoreLatestBackup = async () => {
     if (!session) return
     const response = await restoreLatestQaBackup(session)
@@ -472,7 +546,7 @@ export default function App() {
     <Shell
       user={currentUser}
       activePage={activePage}
-      onNavigate={setActivePage}
+      onNavigate={handleNavigate}
       onLogout={handleLogout}
       reviews={reviews}
       presenceUsers={presenceUsers}
@@ -483,7 +557,9 @@ export default function App() {
           user={currentUser}
           users={users}
           reviews={reviews}
-          onNewReview={() => setActivePage('review')}
+          watchListAgents={watchListAgents}
+          onOpenWatchList={() => handleNavigate('watchlist')}
+          onNewReview={() => handleNavigate('review')}
           onRefresh={() => void refreshReviews(true)}
           refreshing={refreshing}
           onCreateBackup={handleCreateBackup}
@@ -496,8 +572,21 @@ export default function App() {
           user={currentUser}
           settings={settings}
           evaluators={activeEvaluators}
+          watchListAgents={watchListAgents}
           onSave={handleSaveReview}
           saving={busy}
+        />
+      )}
+
+      {activePage === 'watchlist' && (
+        <WatchListPage
+          user={currentUser}
+          agents={watchListAgents}
+          reviews={reviews}
+          onSave={handleSaveWatchListAgent}
+          onSetStatus={handleWatchListStatus}
+          onRefresh={refreshWatchList}
+          busy={busy}
         />
       )}
 

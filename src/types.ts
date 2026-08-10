@@ -125,3 +125,37 @@ export interface ApiResponse<T = unknown> {
   settings?: AppSettings
   reviews?: ReviewRecord[]
 }
+
+export type WatchListStatus = 'Active' | 'Cleared' | 'Removed'
+
+export interface WatchListAgentInput {
+  callCenter: string
+  lob: string
+  agentName: string
+  trainer: string
+  wave: string
+  startDate: string
+  endDate: string
+  employeeStatus: string
+  reason: string
+  /** Optional admin override for the Watch List display only. Null/undefined = use automatic Firebase QA average. */
+  manualQaScore?: number | null
+  /** Optional admin override for the Watch List review count only. Null/undefined = use matched Firebase review count. */
+  manualReviewCount?: number | null
+  /** Optional when editing. New agents default to Active. */
+  watchStatus?: WatchListStatus
+}
+
+export interface WatchListAgent extends WatchListAgentInput {
+  id: string
+  watchStatus: WatchListStatus
+  createdAt: string
+  createdBy: string
+  createdByName: string
+  updatedAt?: string
+  updatedBy?: string
+  updatedByName?: string
+  clearedAt?: string
+  clearedBy?: string
+  clearedByName?: string
+}

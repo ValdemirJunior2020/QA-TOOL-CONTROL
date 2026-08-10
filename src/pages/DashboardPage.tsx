@@ -1,9 +1,12 @@
 import { useMemo } from 'react'
-import type { QaUser, ReviewRecord } from '../types'
+import type { QaUser, ReviewRecord, WatchListAgent } from '../types'
+import { getWatchListMetrics } from '../lib/watchList'
 
 interface DashboardPageProps {
   user: QaUser
   reviews: ReviewRecord[]
+  watchListAgents: WatchListAgent[]
+  onOpenWatchList: () => void
   users: QaUser[]
   onNewReview: () => void
   onRefresh: () => void
@@ -15,7 +18,7 @@ interface DashboardPageProps {
 function average(values: number[]) { return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0 }
 function todayKey() { return new Date().toISOString().slice(0, 10) }
 
-export function DashboardPage({ user, reviews, users, onNewReview, onRefresh, refreshing, onCreateBackup, onRestoreLatestBackup }: DashboardPageProps) {
+export function DashboardPage({ user, reviews, watchListAgents, onOpenWatchList, users, onNewReview, onRefresh, refreshing, onCreateBackup, onRestoreLatestBackup }: DashboardPageProps) {
   const stats = useMemo(() => {
     const passed = reviews.filter((r) => r.result === 'PASS').length
     const today = reviews.filter((r) => String(r.reviewDate || r.savedTimestamp).slice(0, 10) === todayKey()).length
@@ -27,9 +30,14 @@ export function DashboardPage({ user, reviews, users, onNewReview, onRefresh, re
   }, [reviews])
   const recent = [...reviews].sort((a,b) => String(b.savedTimestamp).localeCompare(String(a.savedTimestamp))).slice(0,8)
   const guidedUsers = users.filter((u) => u.guidedMode && u.active).length
+  const activeWatchAgents = watchListAgents.filter((agent) => agent.watchStatus === 'Active')
+  const watchUnderKpi = activeWatchAgents.filter((agent) => {
+    const averageScore = getWatchListMetrics(agent, reviews).averageScore
+    return averageScore !== null && averageScore < 90
+  }).length
 
   return <div className="page-stack">
-    <section className="hero-panel"><div><p className="eyebrow">Welcome back, {user.displayName}</p><h1>Keep every QA review accurate and under control.</h1><p>Live metrics, email tracking, protected saves, and reporting now run directly on Firebase.</p></div><div className="hero-actions">{user.permissions.canSubmitReviews && <button className="primary-button" onClick={onNewReview}>Start a QA Review</button>}<button className="secondary-button" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh Firebase Data'}</button></div></section>
+    <section className="hero-panel dashboard-hero-with-watch"><div><p className="eyebrow">Welcome back, {user.displayName}</p><h1>Keep every QA review accurate and under control.</h1><p>Live metrics, email tracking, protected saves, and reporting now run directly on Firebase.</p></div><div className={`dashboard-watch-card ${watchUnderKpi ? 'has-alert' : ''}`}><div className="dashboard-watch-title"><span className="dashboard-watch-eye">👁</span><strong>Watch List — {activeWatchAgents.length} Agents</strong>{watchUnderKpi > 0 && <span className="dashboard-watch-alert" title="At least one Watch List agent is under 90% KPI">🔴</span>}</div><small>{watchUnderKpi > 0 ? `${watchUnderKpi} under 90% KPI` : 'No active agents under 90% KPI'}</small><button type="button" className="watch-view-button" onClick={onOpenWatchList}>View All</button></div><div className="hero-actions">{user.permissions.canSubmitReviews && <button className="primary-button" onClick={onNewReview}>Start a QA Review</button>}<button className="secondary-button" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh Firebase Data'}</button></div></section>
     <section className="stat-grid dashboard-expanded-stats">
       <article className="stat-card"><span>Reviews Today</span><strong>{stats.today}</strong><small>Based on review date</small></article>
       <article className="stat-card"><span>Total Reviews</span><strong>{reviews.length}</strong><small>Loaded from Firebase</small></article>

@@ -1,8 +1,10 @@
 import type { ReactNode } from 'react'
 import type { PresenceUser } from '../lib/api'
 import type { QaUser, ReviewRecord } from '../types'
+import { WeatherWidget } from './WeatherWidget'
+import { DailyPupWidget } from './DailyPupWidget'
 
-export type AppPage = 'dashboard' | 'review' | 'history' | 'admin'
+export type AppPage = 'dashboard' | 'review' | 'watchlist' | 'history' | 'admin'
 
 interface ShellProps {
   user: QaUser
@@ -20,6 +22,7 @@ function pageLabel(page: string): string {
 
   if (normalized === 'dashboard') return 'Dashboard'
   if (normalized === 'review') return 'New Review'
+  if (normalized === 'watchlist') return 'Watch List'
   if (normalized === 'history') return 'Review History'
   if (normalized === 'admin') return 'Admin Control'
 
@@ -82,6 +85,7 @@ export function Shell({
   }> = [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'review', label: 'New Review' },
+    { id: 'watchlist', label: '👁 Watch List' },
     { id: 'history', label: 'Review History' },
     { id: 'admin', label: 'Admin Control', adminOnly: true },
   ]
@@ -286,6 +290,11 @@ export function Shell({
           <div>
             <p className="eyebrow">Quality Assurance</p>
             <h2>{currentPageTitle}</h2>
+          </div>
+
+          <div className="topbar-center-fun">
+            <WeatherWidget />
+            <DailyPupWidget />
           </div>
 
           <div className="topbar-badges">

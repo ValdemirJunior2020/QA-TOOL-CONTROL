@@ -1,0 +1,35 @@
+WATCH LIST UPDATE
+=================
+
+The Watch List feature is included in this project.
+
+IMPORTANT: deploy the included Firestore rules once before using Watch List writes:
+
+  firebase deploy --only firestore:rules
+
+The existing QA app remains usable even if the Watch List rules have not been deployed yet.
+
+Starter agents:
+- 11 agents from Watcj-List.xlsx are included.
+- The Email column was intentionally NOT imported.
+- On the first Junior or Barbara login, if watchListAgents is empty, those 11 agents are added automatically.
+
+Permissions:
+- Every signed-in user can view Watch List agents.
+- Only Junior and Barbara can add/edit/clear/remove/restore.
+- Firestore delete is disabled; Clear/Remove keeps history.
+
+KPI colors:
+- Under 90% = red
+- 90% to 94.99% = yellow
+- 95%+ = green
+- No QA reviews = gray
+
+QA scores are calculated automatically from existing Firebase reviews by normalized agent name.
+
+
+EDITABLE WATCH LIST FIELDS
+--------------------------
+Junior and Barbara can edit every Watch List detail from Edit Agent.
+QA Avg Override and Reviews Override are optional. Leave either blank to keep using automatic Firebase QA review data.
+A manual QA Avg override changes the Watch List display/KPI color only; it does NOT rewrite historical QA review records.
