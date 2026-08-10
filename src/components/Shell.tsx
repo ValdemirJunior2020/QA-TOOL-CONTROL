@@ -3,6 +3,7 @@ import type { PresenceUser } from '../lib/api'
 import type { QaUser, ReviewRecord } from '../types'
 import { WeatherWidget } from './WeatherWidget'
 import { DailyPupWidget } from './DailyPupWidget'
+import FunFactWidget from './FunFactWidget'
 
 export type AppPage = 'dashboard' | 'review' | 'watchlist' | 'history' | 'admin'
 
@@ -292,10 +293,14 @@ export function Shell({
             <h2>{currentPageTitle}</h2>
           </div>
 
-          <div className="topbar-center-fun">
-            <WeatherWidget />
-            <DailyPupWidget />
-          </div>
+          <div className="topbar-center-stack">
+  <div className="topbar-center-fun">
+    <WeatherWidget />
+    <DailyPupWidget />
+  </div>
+
+  <FunFactWidget />
+</div>
 
           <div className="topbar-badges">
             {user.guidedMode && (
