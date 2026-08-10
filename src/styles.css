@@ -1163,14 +1163,32 @@ h1 { letter-spacing: -0.035em; }
   overflow: hidden;
 }
 
+
+
+.weather-star { position: absolute; color: #9a86ff; font-size: 9px; animation: weather-star-twinkle 1.8s ease-in-out infinite; }
+.weather-star--one { right: 5px; top: 10px; }
+.weather-star--two { right: 10px; bottom: 10px; animation-delay: .7s; }
+
+.weather-extra-line {
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: #7c879b;
+  font-size: 9.5px;
+  font-weight: 800;
+}
 .weather-scene {
   position: relative;
   flex: 0 0 58px;
   width: 58px;
   height: 58px;
   display: inline-block;
+  overflow: visible;
 }
 
+/* Main sunny icon ball */
 .weather-sun-core {
   position: absolute;
   width: 30px;
@@ -1181,35 +1199,31 @@ h1 { letter-spacing: -0.035em; }
   border-radius: 999px;
   background: linear-gradient(145deg, #ffd95a, #ff9c1a);
   box-shadow: 0 0 14px rgba(255, 179, 26, 0.36);
-  animation: weather-sun-pulse 2.4s ease-in-out infinite;
+  animation: weather-sun-core-pulse 2.4s ease-in-out infinite;
   z-index: 2;
 }
 
-.weather-sun-core {
-  width: 28px;
-  height: 28px;
-  left: 15px;
-  top: 15px;
-  animation: weather-sun-pulse 2.4s ease-in-out infinite;
-}
-
+/* Rotating rays around the exact same center */
 .weather-sun-rays {
   position: absolute;
   inset: 0;
+  width: 58px;
+  height: 58px;
+  transform-origin: 29px 29px;
   animation: weather-sun-spin 8s linear infinite;
+  z-index: 1;
 }
 
 .weather-sun-rays i {
   position: absolute;
-  left: 50%;
-  top: 50%;
+  left: 27px;
+  top: 2px;
   width: 4px;
-  height: 13px;
-  margin-left: -2px;
-  margin-top: -32px;
+  height: 11px;
+  margin: 0;
   border-radius: 999px;
   background: linear-gradient(#ffc847, #ff9f1c);
-  transform-origin: 50% 32px;
+  transform-origin: 2px 27px;
 }
 
 .weather-sun-rays i:nth-child(1) { transform: rotate(0deg); }
@@ -1221,11 +1235,16 @@ h1 { letter-spacing: -0.035em; }
 .weather-sun-rays i:nth-child(7) { transform: rotate(270deg); }
 .weather-sun-rays i:nth-child(8) { transform: rotate(315deg); }
 
+/* Smaller sun used with partly-cloudy weather */
 .weather-mini-sun {
+  position: absolute;
   width: 26px;
   height: 26px;
   left: 7px;
   top: 8px;
+  border-radius: 999px;
+  background: linear-gradient(145deg, #ffd95a, #ff9c1a);
+  box-shadow: 0 0 14px rgba(255, 179, 26, 0.36);
   animation: weather-sun-pulse 2.5s ease-in-out infinite;
 }
 
@@ -1246,12 +1265,43 @@ h1 { letter-spacing: -0.035em; }
   background: inherit;
 }
 
-.weather-cloud::before { width: 21px; height: 21px; left: 7px; top: -10px; }
-.weather-cloud::after { width: 16px; height: 16px; right: 5px; top: -6px; }
-.weather-cloud--front { left: 17px; top: 29px; animation: weather-cloud-drift 3.2s ease-in-out infinite; }
-.weather-cloud--solo { left: 10px; top: 24px; animation: weather-cloud-drift 3.6s ease-in-out infinite; }
-.weather-cloud--precip { left: 10px; top: 17px; animation: weather-cloud-bob 2.8s ease-in-out infinite; }
-.weather-cloud--fog { left: 10px; top: 13px; animation: weather-cloud-drift 4s ease-in-out infinite; }
+.weather-cloud::before {
+  width: 21px;
+  height: 21px;
+  left: 7px;
+  top: -10px;
+}
+
+.weather-cloud::after {
+  width: 16px;
+  height: 16px;
+  right: 5px;
+  top: -6px;
+}
+
+.weather-cloud--front {
+  left: 17px;
+  top: 29px;
+  animation: weather-cloud-drift 3.2s ease-in-out infinite;
+}
+
+.weather-cloud--solo {
+  left: 10px;
+  top: 24px;
+  animation: weather-cloud-drift 3.6s ease-in-out infinite;
+}
+
+.weather-cloud--precip {
+  left: 10px;
+  top: 17px;
+  animation: weather-cloud-bob 2.8s ease-in-out infinite;
+}
+
+.weather-cloud--fog {
+  left: 10px;
+  top: 13px;
+  animation: weather-cloud-drift 4s ease-in-out infinite;
+}
 
 .weather-raindrop {
   position: absolute;
@@ -1261,11 +1311,23 @@ h1 { letter-spacing: -0.035em; }
   border-radius: 999px;
   background: linear-gradient(#69b9ff, #2d86dd);
   transform: rotate(12deg);
-  animation: weather-rain-fall .9s linear infinite;
+  animation: weather-rain-fall 0.9s linear infinite;
 }
-.weather-raindrop--one { left: 17px; animation-delay: 0s; }
-.weather-raindrop--two { left: 29px; animation-delay: .22s; }
-.weather-raindrop--three { left: 41px; animation-delay: .44s; }
+
+.weather-raindrop--one {
+  left: 17px;
+  animation-delay: 0s;
+}
+
+.weather-raindrop--two {
+  left: 29px;
+  animation-delay: 0.22s;
+}
+
+.weather-raindrop--three {
+  left: 41px;
+  animation-delay: 0.44s;
+}
 
 .weather-snowflake {
   position: absolute;
@@ -1275,9 +1337,20 @@ h1 { letter-spacing: -0.035em; }
   font-style: normal;
   animation: weather-snow-fall 1.8s ease-in-out infinite;
 }
-.weather-snowflake--one { left: 15px; }
-.weather-snowflake--two { left: 28px; animation-delay: .35s; }
-.weather-snowflake--three { left: 41px; animation-delay: .7s; }
+
+.weather-snowflake--one {
+  left: 15px;
+}
+
+.weather-snowflake--two {
+  left: 28px;
+  animation-delay: 0.35s;
+}
+
+.weather-snowflake--three {
+  left: 41px;
+  animation-delay: 0.7s;
+}
 
 .weather-lightning {
   position: absolute;
@@ -1287,7 +1360,7 @@ h1 { letter-spacing: -0.035em; }
   font-size: 27px;
   font-style: normal;
   font-weight: 900;
-  text-shadow: 0 0 10px rgba(255, 187, 28, .65);
+  text-shadow: 0 0 10px rgba(255, 187, 28, 0.65);
   animation: weather-lightning-flash 2.4s steps(1) infinite;
 }
 
@@ -1300,8 +1373,17 @@ h1 { letter-spacing: -0.035em; }
   background: #bdc9d8;
   animation: weather-fog-slide 3s ease-in-out infinite;
 }
-.weather-fog-line--one { top: 37px; }
-.weather-fog-line--two { top: 46px; width: 32px; left: 17px; animation-delay: .45s; }
+
+.weather-fog-line--one {
+  top: 37px;
+}
+
+.weather-fog-line--two {
+  top: 46px;
+  width: 32px;
+  left: 17px;
+  animation-delay: 0.45s;
+}
 
 .weather-moon {
   position: absolute;
@@ -1311,25 +1393,33 @@ h1 { letter-spacing: -0.035em; }
   top: 12px;
   border-radius: 50%;
   background: #f7d96d;
-  box-shadow: -8px 4px 0 1px #f8fafc, 0 0 15px rgba(247, 217, 109, .28);
+  box-shadow:
+    -8px 4px 0 1px #f8fafc,
+    0 0 15px rgba(247, 217, 109, 0.28);
   animation: weather-moon-float 3.4s ease-in-out infinite;
 }
 
-.weather-star { position: absolute; color: #9a86ff; font-size: 9px; animation: weather-star-twinkle 1.8s ease-in-out infinite; }
-.weather-star--one { right: 5px; top: 10px; }
-.weather-star--two { right: 10px; bottom: 10px; animation-delay: .7s; }
+/* Sun animations */
+@keyframes weather-sun-spin {
+  from {
+    transform: rotate(0deg);
+  }
 
-.weather-extra-line {
-  margin-top: 3px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  color: #7c879b;
-  font-size: 9.5px;
-  font-weight: 800;
+  to {
+    transform: rotate(360deg);
+  }
 }
 
+@keyframes weather-sun-core-pulse {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  50% {
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
 .weather-loading-orb {
   flex: 0 0 auto;
   width: 32px;
@@ -2748,5 +2838,132 @@ h1 { letter-spacing: -0.035em; }
 
   .topbar-badges {
     display: none;
+  }
+}
+
+
+/* =========================================================
+   FINAL WEATHER SUN GEOMETRY FIX
+   Keep this block at the VERY END of styles.css.
+   It overrides older conflicting sun sizes so the sun ball
+   and rotating rays always share the exact same center.
+   ========================================================= */
+
+.weather-scene {
+  position: relative;
+  flex: 0 0 86px;
+  width: 86px;
+  height: 86px;
+  display: inline-block;
+  overflow: visible;
+  transform: none !important;
+  transform-origin: center;
+}
+
+/* Main sun ball */
+.weather-sun-core {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 34px;
+  height: 34px;
+  margin: 0;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #ffd95a, #ff9c1a);
+  box-shadow:
+    0 0 10px rgba(255, 179, 26, 0.45),
+    0 0 20px rgba(255, 179, 26, 0.18);
+  transform: translate(-50%, -50%);
+  transform-origin: center;
+  animation: weather-sun-core-pulse-final 2.4s ease-in-out infinite;
+  z-index: 2;
+}
+
+/* Rotating rays: same exact 86 x 86 center as the ball */
+.weather-sun-rays {
+  position: absolute;
+  inset: 0;
+  width: 86px;
+  height: 86px;
+  margin: 0;
+  transform-origin: 43px 43px;
+  animation: weather-sun-spin-final 8s linear infinite;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.weather-sun-rays i {
+  position: absolute;
+  left: 41px;
+  top: 5px;
+  width: 4px;
+  height: 12px;
+  margin: 0;
+  border-radius: 999px;
+  background: linear-gradient(#ffc847, #ff9f1c);
+  transform-origin: 2px 38px;
+}
+
+.weather-sun-rays i:nth-child(1) { transform: rotate(0deg); }
+.weather-sun-rays i:nth-child(2) { transform: rotate(45deg); }
+.weather-sun-rays i:nth-child(3) { transform: rotate(90deg); }
+.weather-sun-rays i:nth-child(4) { transform: rotate(135deg); }
+.weather-sun-rays i:nth-child(5) { transform: rotate(180deg); }
+.weather-sun-rays i:nth-child(6) { transform: rotate(225deg); }
+.weather-sun-rays i:nth-child(7) { transform: rotate(270deg); }
+.weather-sun-rays i:nth-child(8) { transform: rotate(315deg); }
+
+@keyframes weather-sun-spin-final {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes weather-sun-core-pulse-final {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  50% {
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
+/* Keep partly-cloudy mini sun independent */
+.weather-mini-sun {
+  transform: none;
+}
+
+/* Mobile geometry */
+@media (max-width: 650px) {
+  .weather-scene {
+    flex: 0 0 68px;
+    width: 68px;
+    height: 68px;
+    transform: none !important;
+  }
+
+  .weather-sun-core {
+    width: 28px;
+    height: 28px;
+  }
+
+  .weather-sun-rays {
+    width: 68px;
+    height: 68px;
+    transform-origin: 34px 34px;
+  }
+
+  .weather-sun-rays i {
+    left: 32px;
+    top: 4px;
+    width: 4px;
+    height: 10px;
+    transform-origin: 2px 30px;
   }
 }
