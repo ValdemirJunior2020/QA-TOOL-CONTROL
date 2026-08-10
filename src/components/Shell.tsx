@@ -5,7 +5,12 @@ import { WeatherWidget } from './WeatherWidget'
 import { DailyPupWidget } from './DailyPupWidget'
 import FunFactWidget from './FunFactWidget'
 
-export type AppPage = 'dashboard' | 'review' | 'watchlist' | 'history' | 'admin'
+export type AppPage =
+  | 'dashboard'
+  | 'review'
+  | 'watchlist'
+  | 'history'
+  | 'admin'
 
 interface ShellProps {
   user: QaUser
@@ -44,26 +49,34 @@ function formatLastSeen(lastSeen: string): string {
   if (!lastSeen) return 'Not seen yet'
 
   const time = new Date(lastSeen).getTime()
-  if (!Number.isFinite(time)) return 'Recently active'
+
+  if (!Number.isFinite(time)) {
+    return 'Recently active'
+  }
 
   const differenceSeconds = Math.max(
     0,
     Math.floor((Date.now() - time) / 1000),
   )
 
-  if (differenceSeconds < 60) return 'Just now'
+  if (differenceSeconds < 60) {
+    return 'Just now'
+  }
 
   const minutes = Math.floor(differenceSeconds / 60)
+
   if (minutes < 60) {
     return `${minutes} min${minutes === 1 ? '' : 's'} ago`
   }
 
   const hours = Math.floor(minutes / 60)
+
   if (hours < 24) {
     return `${hours} hr${hours === 1 ? '' : 's'} ago`
   }
 
   const days = Math.floor(hours / 24)
+
   return `${days} day${days === 1 ? '' : 's'} ago`
 }
 
@@ -88,7 +101,11 @@ export function Shell({
     { id: 'review', label: 'New Review' },
     { id: 'watchlist', label: '👁 Watch List' },
     { id: 'history', label: 'Review History' },
-    { id: 'admin', label: 'Admin Control', adminOnly: true },
+    {
+      id: 'admin',
+      label: 'Admin Control',
+      adminOnly: true,
+    },
   ]
 
   const currentPageTitle =
@@ -124,7 +141,9 @@ export function Shell({
         return left.online ? -1 : 1
       }
 
-      return left.displayName.localeCompare(right.displayName)
+      return left.displayName.localeCompare(
+        right.displayName,
+      )
     })
 
   const onlineCount = liveTeam.filter(
@@ -135,7 +154,9 @@ export function Shell({
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <div className="brand-mark small">QA</div>
+          <div className="brand-mark small">
+            QA
+          </div>
 
           <div>
             <strong>QA Control Center</strong>
@@ -143,18 +164,29 @@ export function Shell({
           </div>
         </div>
 
-        <nav className="sidebar-nav" aria-label="Main navigation">
+        <div className="sidebar-page-title">
+          <p>Quality Assurance</p>
+          <h2>{currentPageTitle}</h2>
+        </div>
+
+        <nav
+          className="sidebar-nav"
+          aria-label="Main navigation"
+        >
           {items
             .filter(
               (item) =>
-                !item.adminOnly || user.role === 'admin',
+                !item.adminOnly ||
+                user.role === 'admin',
             )
             .map((item) => (
               <button
                 key={item.id}
                 type="button"
                 className={
-                  activePage === item.id ? 'active' : ''
+                  activePage === item.id
+                    ? 'active'
+                    : ''
                 }
                 onClick={() => onNavigate(item.id)}
               >
@@ -169,7 +201,11 @@ export function Shell({
             className="sidebar-tool-button agent-picks-button"
           >
             <span>Agent&apos;s Pick Page</span>
-            <span className="external-arrow" aria-hidden="true">
+
+            <span
+              className="external-arrow"
+              aria-hidden="true"
+            >
               ↗
             </span>
           </a>
@@ -180,9 +216,14 @@ export function Shell({
             onClick={() => onNavigate('history')}
           >
             <span>Firebase Excel Downloads</span>
-            <span className="external-arrow" aria-hidden="true">↓</span>
-          </button>
 
+            <span
+              className="external-arrow"
+              aria-hidden="true"
+            >
+              ↓
+            </span>
+          </button>
         </nav>
 
         <section
@@ -194,6 +235,7 @@ export function Shell({
               <span className="live-team-kicker">
                 Constant monitoring
               </span>
+
               <strong>Live Team</strong>
             </div>
 
@@ -227,11 +269,15 @@ export function Shell({
                   />
 
                   <div className="live-team-user-copy">
-                    <strong>{teamUser.displayName}</strong>
+                    <strong>
+                      {teamUser.displayName}
+                    </strong>
 
                     <span>
                       {teamUser.online
-                        ? pageLabel(teamUser.currentPage)
+                        ? pageLabel(
+                            teamUser.currentPage,
+                          )
                         : roleLabel(teamUser)}
                     </span>
                   </div>
@@ -244,13 +290,17 @@ export function Shell({
                           : 'live-presence-status--offline'
                       }
                     >
-                      {teamUser.online ? 'ONLINE' : 'OFFLINE'}
+                      {teamUser.online
+                        ? 'ONLINE'
+                        : 'OFFLINE'}
                     </strong>
 
                     <span>
                       {teamUser.online
                         ? 'Live now'
-                        : formatLastSeen(teamUser.lastSeen)}
+                        : formatLastSeen(
+                            teamUser.lastSeen,
+                          )}
                     </span>
                   </div>
                 </article>
@@ -261,7 +311,9 @@ export function Shell({
 
         <div className="sidebar-user">
           <div className="avatar">
-            {user.displayName.slice(0, 1).toUpperCase()}
+            {user.displayName
+              .slice(0, 1)
+              .toUpperCase()}
           </div>
 
           <div className="sidebar-user-copy">
@@ -288,36 +340,39 @@ export function Shell({
 
       <div className="main-column">
         <header className="topbar">
-          <div>
-            <p className="eyebrow">Quality Assurance</p>
-            <h2>{currentPageTitle}</h2>
-          </div>
-
           <div className="topbar-center-stack">
-  <div className="topbar-center-fun">
-    <WeatherWidget />
-    <DailyPupWidget />
-  </div>
+            <div className="topbar-center-fun">
+              <WeatherWidget />
+              <DailyPupWidget />
+            </div>
 
-  <FunFactWidget />
-</div>
+            <FunFactWidget />
+          </div>
 
           <div className="topbar-badges">
             {user.guidedMode && (
-              <span className="badge guided">Guided Mode</span>
+              <span className="badge guided">
+                Guided Mode
+              </span>
             )}
 
             <span
               className={`badge ${
-                user.active ? 'active' : 'blocked'
+                user.active
+                  ? 'active'
+                  : 'blocked'
               }`}
             >
-              {user.active ? 'Active' : 'Blocked'}
+              {user.active
+                ? 'Active'
+                : 'Blocked'}
             </span>
           </div>
         </header>
 
-        <main className="content-area">{children}</main>
+        <main className="content-area">
+          {children}
+        </main>
       </div>
     </div>
   )
