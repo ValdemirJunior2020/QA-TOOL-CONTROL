@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { ADMIN_EMAILS, normalizeEmail } from '../lib/firebase'
 import { exportWatchListExcel } from '../lib/exportWatchListExcel'
-import { getWatchListMetrics } from '../lib/watchList'
+import { getWatchListMetrics, normalizeAgentName, normalizeCallCenter, watchListFirstTwoNamesMatch } from '../lib/watchList'
 import type { QaUser, ReviewRecord, WatchListAgent, WatchListAgentInput, WatchListStatus } from '../types'
 
 interface WatchListPageProps {
@@ -59,7 +59,7 @@ export function WatchListPage({ user, agents, reviews, onSave, onSetStatus, onRe
   }, [agents, filter, query])
 
   const activeCount = agents.filter((agent) => agent.watchStatus === 'Active').length
-  const underKpiCount = agents.filter((agent) => agent.watchStatus === 'Active' && getWatchListMetrics(agent, reviews).averageScore !== null && Number(getWatchListMetrics(agent, reviews).averageScore) < 90).length
+  const underKpiCount = agents.filter((agent) => agent.watchStatus === 'Active' && getWatchListMetrics(agent, reviews, agents).averageScore !== null && Number(getWatchListMetrics(agent, reviews, agents).averageScore) < 90).length
 
   const openNew = () => {
     setEditing(null)
@@ -98,6 +98,24 @@ export function WatchListPage({ user, agents, reviews, onSave, onSetStatus, onRe
       setError('QA Avg Override must be between 0 and 100%.')
       return
     }
+
+    const sameFirstTwoExisting = agents.find((agent) => {
+      if (agent.id === editing?.id || agent.watchStatus !== 'Active') return false
+      if (normalizeCallCenter(agent.callCenter) !== normalizeCallCenter(form.callCenter)) return false
+      if (normalizeAgentName(agent.agentName) === normalizeAgentName(form.agentName)) return false
+      return watchListFirstTwoNamesMatch(agent.agentName, form.agentName)
+    })
+
+    if (sameFirstTwoExisting) {
+      const samePerson = window.confirm(
+        `There is already a Watch List agent named "${sameFirstTwoExisting.agentName}" in ${sameFirstTwoExisting.callCenter}.\n\nIs "${form.agentName.trim()}" the same agent?\n\nOK = Yes, open the existing agent.\nCancel = No, save this as a different agent using the full name.`,
+      )
+      if (samePerson) {
+        openEdit(sameFirstTwoExisting)
+        return
+      }
+    }
+
     try {
       await onSave(form, editing?.id)
       setFormOpen(false)
@@ -148,7 +166,7 @@ export function WatchListPage({ user, agents, reviews, onSave, onSetStatus, onRe
             </thead>
             <tbody>
               {visibleAgents.map((agent) => {
-                const metrics = getWatchListMetrics(agent, reviews)
+                const metrics = getWatchListMetrics(agent, reviews, agents)
                 return (
                   <tr key={agent.id} className={`watch-row watch-row--${metrics.kpiBand} ${agent.watchStatus !== 'Active' ? 'watch-row--history' : ''}`}>
                     <td><strong>{agent.agentName}</strong></td>
@@ -194,7 +212,7 @@ export function WatchListPage({ user, agents, reviews, onSave, onSetStatus, onRe
             <div className="panel-heading"><div><p className="eyebrow">Watch List</p><h2>{editing ? 'Edit Agent' : 'Add Agent'}</h2></div><button type="button" className="text-button" onClick={() => setFormOpen(false)}>Close</button></div>
             {error && <div className="error-banner">{error}</div>}
             {editing && (() => {
-              const autoMetrics = getWatchListMetrics({ ...editing, manualQaScore: null, manualReviewCount: null }, reviews)
+              const autoMetrics = getWatchListMetrics({ ...editing, manualQaScore: null, manualReviewCount: null }, reviews, agents)
               return <div className="watch-auto-summary">Automatic QA from Firebase: <strong>{autoMetrics.averageScore === null ? 'No QA Yet' : `${autoMetrics.averageScore.toFixed(1)}%`}</strong> from <strong>{autoMetrics.reviewCount}</strong> matched review{autoMetrics.reviewCount === 1 ? '' : 's'}. Manual overrides below only change the Watch List display.</div>
             })()}
             <div className="form-grid watch-form-grid">

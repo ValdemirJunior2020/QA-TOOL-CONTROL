@@ -71,6 +71,7 @@ export interface ReviewDraft {
   callLength: string
   callDate: string
   criteria: CriterionAnswer[]
+  additionalComments: string
 }
 
 export interface ReviewRecord {
@@ -96,6 +97,7 @@ export interface ReviewRecord {
   callLength?: string
   callDate?: string
   criteria?: CriterionAnswer[]
+  additionalComments?: string
 }
 
 export interface AuthSession {

@@ -151,14 +151,10 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
 
         const updated = { ...criterion, ...patch }
 
-        // Notes are only used for Markdown or Partial.
-        // If the evaluator changes the status to Followed, N/A, or blank,
-        // clear any old note so it can't accidentally be saved.
-        if (
-          patch.status !== undefined &&
-          patch.status !== '✕ Markdown' &&
-          patch.status !== 'Partial'
-        ) {
+        // Custom notes stay available for Followed so evaluators can leave
+        // optional positive/context notes. Markdown and Partial remain required
+        // by validation. Only clear an old note when the status is reset to blank.
+        if (patch.status !== undefined && patch.status === '') {
           updated.customNote = ''
         }
 
@@ -446,18 +442,25 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
                   <td data-label="Auto Points"><strong>{criterion.autoPoints || (criterion.status ? 0 : '')}</strong></td>
                   <td data-label="Notes / Issue Found"><p>{criterion.notes}</p></td>
                   <td data-label="Custom Notes" className={validation.fieldErrors[`note-${index}`] ? 'cell-invalid' : ''}>
-                    {criterion.status === '✕ Markdown' || criterion.status === 'Partial' ? (
+                    {criterion.status ? (
                       <>
                         <textarea
                           value={criterion.customNote}
                           onChange={(event) => updateCriterion(index, { customNote: event.target.value })}
-                          placeholder="Required: explain the issue clearly…"
+                          placeholder={
+                            criterion.status === '✕ Markdown' || criterion.status === 'Partial'
+                              ? 'Required: explain the issue clearly…'
+                              : criterion.status === '✓ Followed'
+                                ? 'Optional: add a positive note or extra context…'
+                                : 'Optional note…'
+                          }
                           disabled={!user.permissions.canEditCustomNotes}
                         />
+                        {criterion.status === '✓ Followed' && !criterion.customNote.trim() && (
+                          <small className="optional-note-hint">Optional for Followed.</small>
+                        )}
                         {validation.fieldErrors[`note-${index}`] && <small>{validation.fieldErrors[`note-${index}`]}</small>}
                       </>
-                    ) : criterion.status ? (
-                      <span className="note-not-required">No note required.</span>
                     ) : (
                       <span className="note-not-required">Select a status first.</span>
                     )}
@@ -466,6 +469,19 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
               ))}
             </tbody>
           </table>
+        </div>
+
+        <div className="review-additional-comments">
+          <label className="field">
+            <span>Additional Comments (Optional)</span>
+            <textarea
+              value={review.additionalComments || ''}
+              onChange={(event) => updateField('additionalComments', event.target.value)}
+              placeholder="Add general observations that do not affect scoring, such as line quality, background noise, customer behavior, or positive feedback about the agent…"
+              disabled={!user.permissions.canEditCustomNotes}
+            />
+            <em>Optional. This does not affect the QA score.</em>
+          </label>
         </div>
 
         <div className="save-bar">
@@ -488,7 +504,7 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
               <label><input type="checkbox" required /> The Call ID belongs to this exact call.</label>
               <label><input type="checkbox" required /> The booking reference belongs to this guest.</label>
               <label><input type="checkbox" required /> The call center, QA type, call length, and call date are correct.</label>
-              <label><input type="checkbox" required /> Every criterion status was checked, and notes were added only where Markdown or Partial requires them.</label>
+              <label><input type="checkbox" required /> Every criterion status was checked. Followed comments are optional; Markdown / Partial notes were added where required.</label>
             </div>
             <p className="kind-note">Take your time. This extra check is here to help prevent small mistakes.</p>
             <div className="modal-actions">

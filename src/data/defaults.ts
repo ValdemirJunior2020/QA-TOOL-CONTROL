@@ -154,6 +154,7 @@ export function createReviewDraft(settings: AppSettings, evaluator: string, qaTy
     callLength: '',
     callDate: '',
     criteria: createCriterionAnswers(settings, qaType),
+    additionalComments: '',
   }
 }
 

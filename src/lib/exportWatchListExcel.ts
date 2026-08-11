@@ -39,7 +39,7 @@ export async function exportWatchListExcel(agents: WatchListAgent[], reviews: Re
   header.alignment = { vertical: 'middle', horizontal: 'center' }
 
   agents.forEach((agent) => {
-    const metrics = getWatchListMetrics(agent, reviews)
+    const metrics = getWatchListMetrics(agent, reviews, agents)
     const row = sheet.addRow({
       ...agent,
       qaAverage: metrics.averageScore === null ? '' : metrics.averageScore / 100,

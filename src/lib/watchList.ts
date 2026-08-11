@@ -18,10 +18,20 @@ function agentNameTokens(value: string): string[] {
 }
 
 /**
- * QA review names are sometimes saved without one of the middle names that
- * exists in the Watch List (for example "Alexandra Paul Mogro" vs
- * "Alexandra Paul Sabugo Mogro"). Match those safely while still requiring
- * the same first and last name.
+ * Used only by Watch List QA scoring. The first two names are the identity
+ * key, so "Alexandra Paul" matches "Alexandra Paul Sabugo Mogro".
+ */
+export function watchListFirstTwoNamesMatch(left: string, right: string): boolean {
+  const leftTokens = agentNameTokens(left)
+  const rightTokens = agentNameTokens(right)
+  if (leftTokens.length < 2 || rightTokens.length < 2) return false
+  return leftTokens[0] === rightTokens[0] && leftTokens[1] === rightTokens[1]
+}
+
+/**
+ * Existing safer matcher used outside the Watch List scoring calculation.
+ * Keep first + last-name behavior so the new first-two-name rule does not
+ * change matching elsewhere in the QA tool.
  */
 export function agentNamesMatch(left: string, right: string): boolean {
   const normalizedLeft = normalizeAgentName(left)
@@ -71,10 +81,26 @@ export function normalizeCallCenter(value: string): string {
   return aliases[normalized] || normalized
 }
 
-export function getWatchListMetrics(agent: WatchListAgent, reviews: ReviewRecord[]) {
+function hasAmbiguousFirstTwoName(agent: WatchListAgent, allAgents: WatchListAgent[]): boolean {
+  const center = normalizeCallCenter(agent.callCenter)
+  return allAgents.some((other) => {
+    if (other.id === agent.id || other.watchStatus !== 'Active') return false
+    const otherCenter = normalizeCallCenter(other.callCenter)
+    const sameCenter = !center || !otherCenter || center === otherCenter
+    return sameCenter && watchListFirstTwoNamesMatch(agent.agentName, other.agentName)
+  })
+}
+
+export function getWatchListMetrics(agent: WatchListAgent, reviews: ReviewRecord[], allAgents: WatchListAgent[] = []) {
   const normalizedCenter = normalizeCallCenter(agent.callCenter)
+  const ambiguousFirstTwo = allAgents.length > 0 && hasAmbiguousFirstTwoName(agent, allAgents)
   const matchedReviews = reviews.filter((review) => {
-    const sameAgent = agentNamesMatch(review.agentName || '', agent.agentName)
+    // Normal Watch List behavior: match the first two names only. If two active
+    // Watch List agents in the same center ever share those first two names,
+    // require the full name so their QA scores cannot be mixed together.
+    const sameAgent = ambiguousFirstTwo
+      ? normalizeAgentName(review.agentName || '') === normalizeAgentName(agent.agentName)
+      : watchListFirstTwoNamesMatch(review.agentName || '', agent.agentName)
     const reviewCenter = normalizeCallCenter(review.callCenter || '')
     const sameCenter = !normalizedCenter || !reviewCenter || reviewCenter === normalizedCenter
     return sameAgent && sameCenter
@@ -104,7 +130,7 @@ export function getWatchListMetrics(agent: WatchListAgent, reviews: ReviewRecord
         ? 'Passing · Watch'
         : 'Strong'
 
-  return { matchedReviews, reviewCount, averageScore, automaticAverageScore, hasManualScore, hasManualReviewCount, kpiBand, kpiLabel }
+  return { matchedReviews, reviewCount, averageScore, automaticAverageScore, hasManualScore, hasManualReviewCount, kpiBand, kpiLabel, ambiguousFirstTwo }
 }
 
 export function findActiveWatchAgent(agentName: string, agents: WatchListAgent[], callCenter = ''): WatchListAgent | null {

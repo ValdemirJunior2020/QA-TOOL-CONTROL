@@ -676,7 +676,18 @@ export function ReviewsPage({
 
                           <p>
                             {review.issueSummary ||
-                              'No issue summary was returned.'}
+                              'No criterion notes were added.'}
+                          </p>
+                        </div>
+
+                        <div className="issue-box additional-comments-history">
+                          <span>
+                            Additional Comments
+                          </span>
+
+                          <p>
+                            {review.additionalComments ||
+                              'No additional comments.'}
                           </p>
                         </div>
                       </td>

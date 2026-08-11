@@ -4,6 +4,7 @@ import type { QaUser, ReviewRecord } from '../types'
 import { WeatherWidget } from './WeatherWidget'
 import { DailyPupWidget } from './DailyPupWidget'
 import FunFactWidget from './FunFactWidget'
+import { QaWordHelper } from './QaWordHelper'
 
 export type AppPage =
   | 'dashboard'
@@ -224,6 +225,8 @@ export function Shell({
               ↓
             </span>
           </button>
+
+          <QaWordHelper />
         </nav>
 
         <section
@@ -373,6 +376,7 @@ export function Shell({
         <main className="content-area">
           {children}
         </main>
+
       </div>
     </div>
   )

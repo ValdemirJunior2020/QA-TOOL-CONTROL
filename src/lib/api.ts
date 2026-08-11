@@ -46,6 +46,15 @@ function sanitizeUser(raw: any, fallback?: QaUser): QaUser {
 
 function dateOnly(value: unknown): string {
   if (!value) return ''
+
+  // HTML date inputs already give us a local calendar date (YYYY-MM-DD).
+  // Parsing that string with new Date() treats it as UTC and can move it to
+  // the previous day in US time zones, so preserve date-only values exactly.
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed
+  }
+
   const date = value instanceof Date ? value : new Date(String(value))
   if (Number.isNaN(date.getTime())) return String(value).slice(0, 10)
   const y = date.getFullYear()
@@ -158,6 +167,7 @@ function calculateReview(review: ReviewDraft, settings: AppSettings, actor: QaUs
     callLength: review.callLength.trim(),
     callDate: dateOnly(review.callDate),
     criteria,
+    additionalComments: String(review.additionalComments || '').trim(),
   }
 }
 

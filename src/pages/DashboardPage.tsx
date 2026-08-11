@@ -16,7 +16,13 @@ interface DashboardPageProps {
 }
 
 function average(values: number[]) { return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0 }
-function todayKey() { return new Date().toISOString().slice(0, 10) }
+function todayKey() {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
 
 export function DashboardPage({ user, reviews, watchListAgents, onOpenWatchList, users, onNewReview, onRefresh, refreshing, onCreateBackup, onRestoreLatestBackup }: DashboardPageProps) {
   const stats = useMemo(() => {
@@ -32,7 +38,7 @@ export function DashboardPage({ user, reviews, watchListAgents, onOpenWatchList,
   const guidedUsers = users.filter((u) => u.guidedMode && u.active).length
   const activeWatchAgents = watchListAgents.filter((agent) => agent.watchStatus === 'Active')
   const watchUnderKpi = activeWatchAgents.filter((agent) => {
-    const averageScore = getWatchListMetrics(agent, reviews).averageScore
+    const averageScore = getWatchListMetrics(agent, reviews, watchListAgents).averageScore
     return averageScore !== null && averageScore < 90
   }).length
 

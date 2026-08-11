@@ -616,14 +616,34 @@ function getCriteriaAndNotes(
         }
       })
 
+    const additionalComments = text(
+      (review as any).additionalComments,
+    )
+
     return {
       criteria: combined,
-      generalNotes:
+      generalNotes: [
         parsed.generalNotes,
+        additionalComments,
+      ]
+        .filter(Boolean)
+        .join('\n'),
     }
   }
 
-  return parsed
+  const additionalComments = text(
+    (review as any).additionalComments,
+  )
+
+  return {
+    criteria: parsed.criteria,
+    generalNotes: [
+      parsed.generalNotes,
+      additionalComments,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  }
 }
 
 function filterReviews(
