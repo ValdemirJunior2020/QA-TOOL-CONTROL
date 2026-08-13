@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { AppSettings, CriterionDefinition, QaType, QaUser, UserRole } from '../types'
 
 const SUPER_ADMIN_EMAIL = 'infojr.83@gmail.com'
@@ -49,6 +49,8 @@ export function AdminPage({
   const [editingUser, setEditingUser] = useState<QaUser | null>(null)
   const [draftSettings, setDraftSettings] = useState<AppSettings>(() => structuredClone(settings))
   const [newCenter, setNewCenter] = useState('')
+  const [editingCenterIndex, setEditingCenterIndex] = useState<number | null>(null)
+  const [editingCenterValue, setEditingCenterValue] = useState('')
   const [legacyFile, setLegacyFile] = useState<File | null>(null)
   const [migrationMessage, setMigrationMessage] = useState('')
 
@@ -74,6 +76,11 @@ export function AdminPage({
 
   const currentUserEmail = currentUser.email.trim().toLowerCase()
   const isSuperAdmin = currentUserEmail === SUPER_ADMIN_EMAIL
+
+  // Keep the editable copy in sync with the latest settings returned by Firebase.
+  useEffect(() => {
+    setDraftSettings(structuredClone(settings))
+  }, [settings])
 
   const saveUser = async () => {
     if (!editingUser) return
@@ -101,15 +108,66 @@ export function AdminPage({
     }))
   }
 
-  const addCenter = () => {
+  const saveCallCenters = async (callCenters: string[]) => {
+    const nextSettings = { ...draftSettings, callCenters }
+    await onSaveSettings(nextSettings)
+    setDraftSettings(nextSettings)
+  }
+
+  const addCenter = async () => {
     const center = newCenter.trim()
-    if (!center) return
+    if (!center || busy) return
     if (draftSettings.callCenters.some((item) => item.toLowerCase() === center.toLowerCase())) {
       window.alert('That call center is already in the list.')
       return
     }
-    setDraftSettings((current) => ({ ...current, callCenters: [...current.callCenters, center] }))
+
+    await saveCallCenters([...draftSettings.callCenters, center])
     setNewCenter('')
+  }
+
+  const startEditingCenter = (index: number) => {
+    setEditingCenterIndex(index)
+    setEditingCenterValue(draftSettings.callCenters[index] || '')
+  }
+
+  const cancelEditingCenter = () => {
+    setEditingCenterIndex(null)
+    setEditingCenterValue('')
+  }
+
+  const saveEditedCenter = async () => {
+    if (editingCenterIndex === null || busy) return
+    const center = editingCenterValue.trim()
+    if (!center) {
+      window.alert('Call center name cannot be blank.')
+      return
+    }
+
+    const duplicate = draftSettings.callCenters.some(
+      (item, index) => index !== editingCenterIndex && item.toLowerCase() === center.toLowerCase(),
+    )
+    if (duplicate) {
+      window.alert('That call center is already in the list.')
+      return
+    }
+
+    const nextCenters = draftSettings.callCenters.map((item, index) =>
+      index === editingCenterIndex ? center : item,
+    )
+    await saveCallCenters(nextCenters)
+    cancelEditingCenter()
+  }
+
+  const deleteCenter = async (index: number) => {
+    if (busy) return
+    const center = draftSettings.callCenters[index]
+    if (!center) return
+    if (!window.confirm(`Delete ${center} from the Call Center list?`)) return
+
+    const nextCenters = draftSettings.callCenters.filter((_, itemIndex) => itemIndex !== index)
+    await saveCallCenters(nextCenters)
+    if (editingCenterIndex === index) cancelEditingCenter()
   }
 
   const saveSettings = async () => {
@@ -366,24 +424,45 @@ export function AdminPage({
 
           <div className="center-manager">
             <h3>Call Centers</h3>
+            <p className="muted">Junior and Barbara can add, rename, or delete call centers. Changes save to Firebase immediately.</p>
+
             <div className="center-chips">
-              {draftSettings.callCenters.map((center) => (
-                <span key={center}>
-                  {center}
-                  <button
-                    type="button"
-                    aria-label={`Remove ${center}`}
-                    onClick={() => setDraftSettings((current) => ({
-                      ...current,
-                      callCenters: current.callCenters.filter((item) => item !== center),
-                    }))}
-                  >×</button>
+              {draftSettings.callCenters.map((center, index) => (
+                <span key={`${center}-${index}`}>
+                  {editingCenterIndex === index ? (
+                    <>
+                      <input
+                        value={editingCenterValue}
+                        onChange={(event) => setEditingCenterValue(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') void saveEditedCenter()
+                          if (event.key === 'Escape') cancelEditingCenter()
+                        }}
+                        autoFocus
+                      />
+                      <button type="button" onClick={() => void saveEditedCenter()} disabled={busy} aria-label={`Save ${center}`}>✓</button>
+                      <button type="button" onClick={cancelEditingCenter} disabled={busy} aria-label={`Cancel editing ${center}`}>×</button>
+                    </>
+                  ) : (
+                    <>
+                      {center}
+                      <button type="button" onClick={() => startEditingCenter(index)} disabled={busy} aria-label={`Edit ${center}`}>✎</button>
+                      <button type="button" onClick={() => void deleteCenter(index)} disabled={busy} aria-label={`Delete ${center}`}>×</button>
+                    </>
+                  )}
                 </span>
               ))}
             </div>
+
             <div className="inline-add">
-              <input value={newCenter} onChange={(event) => setNewCenter(event.target.value)} placeholder="New call center" />
-              <button type="button" className="secondary-button" onClick={addCenter}>Add</button>
+              <input
+                value={newCenter}
+                onChange={(event) => setNewCenter(event.target.value)}
+                onKeyDown={(event) => { if (event.key === 'Enter') void addCenter() }}
+                placeholder="New call center"
+                disabled={busy}
+              />
+              <button type="button" className="secondary-button" onClick={() => void addCenter()} disabled={busy}>Add & Save</button>
             </div>
           </div>
         </section>
@@ -450,7 +529,11 @@ export function AdminPage({
                 <span><strong>Account active</strong><small>Blocked people can’t enter the app.</small></span>
               </label>
               <label className="toggle-row guided-toggle">
-                <input type="checkbox" checked={editingUser.guidedMode} onChange={(event) => setEditingUser({ ...editingUser, guidedMode: event.target.checked })} disabled={editingUser.role === 'admin'}
+                <input type="checkbox" checked={editingUser.guidedMode} onChange={(event) => setEditingUser({ ...editingUser, guidedMode: event.target.checked })} disabled={
+                    editingUser.role === 'admin' ||
+                    (!isSuperAdmin &&
+                      editingUser.email.trim().toLowerCase() !== currentUserEmail)
+                  }
                 />
                 <span><strong>Guided Mode</strong><small>Adds friendly reminders, locked scoring fields, and a final checklist.</small></span>
               </label>
