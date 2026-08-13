@@ -197,7 +197,11 @@ export function ReviewsPage({
       setDownloading(true)
       setDownloadMessage('')
       setProgress(1)
-      setProgressLabel(format === 'sheet' ? 'Preparing full sheet export' : 'Preparing team report')
+      setProgressLabel(
+        format === 'sheet'
+          ? 'Preparing full sheet export'
+          : 'Preparing team report',
+      )
 
       const filters: ReviewExcelFilters = {
         search,
@@ -210,18 +214,112 @@ export function ReviewsPage({
         dateTo,
       }
 
+      const downloadedReviews = [...filtered]
+
       try {
-        const onProgress = (percent: number, label: string) => {
-          setProgress(percent)
+        const onProgress = (
+          percent: number,
+          label: string,
+        ) => {
+          const exportPercent =
+            user.role === 'admin'
+              ? Math.min(
+                  90,
+                  Math.max(
+                    1,
+                    Math.round(
+                      percent * 0.9,
+                    ),
+                  ),
+                )
+              : percent
+
+          setProgress(exportPercent)
           setProgressLabel(label)
         }
-        const filename = format === 'sheet'
-          ? await exportReviewsGoogleSheetStyle(reviews, filters, onProgress)
-          : await exportReviewsToExcel(reviews, filters, onProgress)
 
-        setDownloadMessage(
-          `${filename} was downloaded.`,
-        )
+        const filename =
+          format === 'sheet'
+            ? await exportReviewsGoogleSheetStyle(
+                reviews,
+                filters,
+                onProgress,
+              )
+            : await exportReviewsToExcel(
+                reviews,
+                filters,
+                onProgress,
+              )
+
+        let markedSentCount = 0
+
+        if (user.role === 'admin') {
+          const reviewsToMarkSent =
+            downloadedReviews.filter(
+              (review) =>
+                !Boolean(review.emailSent),
+            )
+
+          if (reviewsToMarkSent.length > 0) {
+            for (
+              let index = 0;
+              index < reviewsToMarkSent.length;
+              index += 1
+            ) {
+              const review =
+                reviewsToMarkSent[index]
+
+              const sentProgress =
+                90 +
+                Math.round(
+                  ((index + 1) /
+                    reviewsToMarkSent.length) *
+                    10,
+                )
+
+              setProgress(
+                Math.min(
+                  100,
+                  sentProgress,
+                ),
+              )
+
+              setProgressLabel(
+                `Marking downloaded reviews as Sent (${index + 1}/${reviewsToMarkSent.length})`,
+              )
+
+              await onMarkEmailSent(
+                review,
+                true,
+              )
+
+              markedSentCount += 1
+            }
+          } else {
+            setProgress(100)
+            setProgressLabel(
+              'Download complete',
+            )
+          }
+        } else {
+          setProgress(100)
+          setProgressLabel(
+            'Download complete',
+          )
+        }
+
+        if (
+          user.role === 'admin' &&
+          markedSentCount > 0
+        ) {
+          setDownloadMessage(
+            `${filename} was downloaded. ${markedSentCount} review${markedSentCount === 1 ? '' : 's'} automatically marked Sent.`,
+          )
+        } else {
+          setDownloadMessage(
+            `${filename} was downloaded.`,
+          )
+        }
       } catch (error) {
         const message =
           error instanceof Error
@@ -238,7 +336,7 @@ export function ReviewsPage({
           setDownloading(false)
           setProgress(0)
           setProgressLabel('')
-        }, 350)
+        }, 700)
       }
     }
 
