@@ -450,11 +450,7 @@ export function AdminPage({
                 <span><strong>Account active</strong><small>Blocked people can’t enter the app.</small></span>
               </label>
               <label className="toggle-row guided-toggle">
-                <input type="checkbox" checked={editingUser.guidedMode} onChange={(event) => setEditingUser({ ...editingUser, guidedMode: event.target.checked })} disabled={
-                    editingUser.role === 'admin' ||
-                    (!isSuperAdmin &&
-                      editingUser.email.trim().toLowerCase() !== currentUserEmail)
-                  }
+                <input type="checkbox" checked={editingUser.guidedMode} onChange={(event) => setEditingUser({ ...editingUser, guidedMode: event.target.checked })} disabled={editingUser.role === 'admin'}
                 />
                 <span><strong>Guided Mode</strong><small>Adds friendly reminders, locked scoring fields, and a final checklist.</small></span>
               </label>
