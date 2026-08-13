@@ -12,6 +12,7 @@ interface WatchListPageProps {
   onSetStatus: (agent: WatchListAgent, status: WatchListStatus) => Promise<void>
   onRefresh: () => Promise<void>
   busy: boolean
+  onOpenPerformance?: (agentName: string) => void
 }
 
 type WatchFilter = 'Active' | 'History' | 'All'
@@ -40,7 +41,7 @@ const EMPTY_FORM: WatchListAgentInput = {
   watchStatus: 'Active',
 }
 
-export function WatchListPage({ user, agents, reviews, onSave, onSetStatus, onRefresh, busy }: WatchListPageProps) {
+export function WatchListPage({ user, agents, reviews, onSave, onSetStatus, onRefresh, busy, onOpenPerformance }: WatchListPageProps) {
   const canManage = ADMIN_EMAILS.has(normalizeEmail(user.email))
   const [filter, setFilter] = useState<WatchFilter>('Active')
   const [query, setQuery] = useState('')
@@ -169,7 +170,7 @@ export function WatchListPage({ user, agents, reviews, onSave, onSetStatus, onRe
                 const metrics = getWatchListMetrics(agent, reviews, agents)
                 return (
                   <tr key={agent.id} className={`watch-row watch-row--${metrics.kpiBand} ${agent.watchStatus !== 'Active' ? 'watch-row--history' : ''}`}>
-                    <td><strong>{agent.agentName}</strong></td>
+                    <td><strong>{agent.agentName}</strong>{canManage && onOpenPerformance && <button type="button" className="watch-history-link" onClick={() => onOpenPerformance(agent.agentName)}>View score history</button>}</td>
                     <td>{agent.callCenter || '—'}</td>
                     <td>{agent.lob || '—'}</td>
                     <td>{agent.trainer || '—'}</td>

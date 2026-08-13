@@ -10,6 +10,15 @@ import type {
 } from '../types'
 
 import {
+  type ColumnDef,
+  getCoreRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  type SortingState,
+  useReactTable,
+} from '@tanstack/react-table'
+
+import {
   exportReviewsToExcel,
   exportReviewsGoogleSheetStyle,
   type ReviewExcelFilters,
@@ -69,6 +78,7 @@ export function ReviewsPage({
     useState('')
   const [progress, setProgress] = useState(0)
   const [progressLabel, setProgressLabel] = useState('')
+  const [sorting, setSorting] = useState<SortingState>([{ id: 'reviewDate', desc: true }])
 
   const centers = useMemo(
     () =>
@@ -187,6 +197,27 @@ export function ReviewsPage({
     dateTo,
     user,
   ])
+
+  const tableColumns = useMemo<ColumnDef<ReviewRecord>[]>(() => [
+    { id: 'reviewDate', accessorFn: (review) => String(review.reviewDate || review.savedTimestamp) },
+    { id: 'agentName', accessorKey: 'agentName' },
+    { id: 'callCenter', accessorKey: 'callCenter' },
+    { id: 'evaluator', accessorKey: 'evaluator' },
+    { id: 'qaType', accessorKey: 'qaType' },
+    { id: 'finalScore', accessorKey: 'finalScore' },
+    { id: 'result', accessorKey: 'result' },
+  ], [])
+
+  const table = useReactTable({
+    data: filtered,
+    columns: tableColumns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    initialState: { pagination: { pageSize: 25 } },
+  })
 
   const downloadFilteredWorkbook =
     async (format: 'team' | 'sheet' = 'team') => {
@@ -584,20 +615,20 @@ export function ReviewsPage({
           <table className="history-table">
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Agent</th>
-                <th>Center</th>
-                <th>Evaluator</th>
-                <th>Type</th>
-                <th>Score</th>
-                <th>Result</th>
+                <th><button className="table-sort-button" type="button" onClick={() => table.getColumn('reviewDate')?.toggleSorting()}>Date{table.getColumn('reviewDate')?.getIsSorted() === 'asc' ? ' ↑' : table.getColumn('reviewDate')?.getIsSorted() === 'desc' ? ' ↓' : ''}</button></th>
+                <th><button className="table-sort-button" type="button" onClick={() => table.getColumn('agentName')?.toggleSorting()}>Agent{table.getColumn('agentName')?.getIsSorted() === 'asc' ? ' ↑' : table.getColumn('agentName')?.getIsSorted() === 'desc' ? ' ↓' : ''}</button></th>
+                <th><button className="table-sort-button" type="button" onClick={() => table.getColumn('callCenter')?.toggleSorting()}>Center</button></th>
+                <th><button className="table-sort-button" type="button" onClick={() => table.getColumn('evaluator')?.toggleSorting()}>Evaluator</button></th>
+                <th><button className="table-sort-button" type="button" onClick={() => table.getColumn('qaType')?.toggleSorting()}>Type</button></th>
+                <th><button className="table-sort-button" type="button" onClick={() => table.getColumn('finalScore')?.toggleSorting()}>Score{table.getColumn('finalScore')?.getIsSorted() === 'asc' ? ' ↑' : table.getColumn('finalScore')?.getIsSorted() === 'desc' ? ' ↓' : ''}</button></th>
+                <th><button className="table-sort-button" type="button" onClick={() => table.getColumn('result')?.toggleSorting()}>Result</button></th>
                 <th>Email Sent</th>
                 <th />
               </tr>
             </thead>
 
             <tbody>
-              {filtered.map((review) => (
+              {table.getRowModel().rows.map(({ original: review }) => (
                 <Fragment key={review.id}>
                   <tr>
                     <td>
@@ -796,6 +827,13 @@ export function ReviewsPage({
             </tbody>
           </table>
         </div>
+
+        {filtered.length > 0 && (
+          <div className="table-pagination">
+            <span>Page {table.getState().pagination.pageIndex + 1} of {Math.max(1, table.getPageCount())}</span>
+            <div><button className="secondary-button" type="button" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>Previous</button><button className="secondary-button" type="button" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>Next</button></div>
+          </div>
+        )}
 
         {filtered.length === 0 && (
           <div className="empty-state">

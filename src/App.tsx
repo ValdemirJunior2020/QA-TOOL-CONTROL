@@ -5,6 +5,7 @@ import { DEFAULT_SETTINGS } from './data/defaults'
 import { bootstrap, createQaBackup, fetchReviews, fetchWatchListAgents, getPresence, markReviewEmailSent, removePresence, restoreLatestQaBackup, saveReview, saveSettings, saveUser, saveWatchListAgent, seedStarterWatchList, setUserBlocked, setWatchListAgentStatus, updatePresence, type PresenceUser } from './lib/api'
 import { signOutFirebase, waitForFirebaseSession } from './lib/auth'
 import { AdminPage } from './pages/AdminPage'
+import { AnalyticsPage } from './pages/AnalyticsPage'
 import { importLegacyWorkbookToFirebase } from './lib/importLegacyWorkbook'
 import { DashboardPage } from './pages/DashboardPage'
 import { ReviewPage } from './pages/ReviewPage'
@@ -68,6 +69,7 @@ function getPresencePageLabel(page: AppPage): string {
     review: 'New Review',
     watchlist: 'Watch List',
     history: 'Review History',
+    analytics: 'Agent Performance',
     admin: 'Admin Control',
   }
 
@@ -120,6 +122,7 @@ export default function App() {
   const [reviews, setReviews] = useState<ReviewRecord[]>([])
   const [watchListAgents, setWatchListAgents] = useState<WatchListAgent[]>([])
   const [activePage, setActivePage] = useState<AppPage>('dashboard')
+  const [performanceAgent, setPerformanceAgent] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadingPercent, setLoadingPercent] = useState(10)
   const [operationProgress, setOperationProgress] = useState<{ percent: number; label: string } | null>(null)
@@ -587,6 +590,7 @@ export default function App() {
           onSetStatus={handleWatchListStatus}
           onRefresh={refreshWatchList}
           busy={busy}
+          onOpenPerformance={(agentName) => { setPerformanceAgent(agentName); handleNavigate('analytics') }}
         />
       )}
 
@@ -598,6 +602,15 @@ export default function App() {
   refreshing={refreshing}
   onMarkEmailSent={handleMarkEmailSent}
 />
+      )}
+
+      {activePage === 'analytics' && currentUser.role === 'admin' && (
+        <AnalyticsPage
+          user={currentUser}
+          reviews={reviews}
+          watchListAgents={watchListAgents}
+          initialAgent={performanceAgent}
+        />
       )}
 
       {activePage === 'admin' && currentUser.role === 'admin' && (

@@ -1,0 +1,26 @@
+TREMOR ANALYTICS - FRONTEND ONLY
+
+What changed
+- Removed the previous optional external-dashboard integration, setup notes, URL button, and related environment-variable references.
+- Added a Tremor-inspired management analytics experience directly inside the existing React QA Tool.
+- No backend, Render, Docker service, or extra host is required.
+- Analytics uses the Firebase review data the QA Tool already loads in the browser.
+
+Barbara's requested Agent Improvement View
+- Search/select an agent.
+- See every QA score for that agent in date order.
+- Trend chart with the 90% KPI line.
+- First score, latest score, average, review count, pass rate, and improvement/decline.
+- Review-level history with date, center, evaluator, Call ID, and itinerary.
+
+Management views
+- Overall QA average.
+- Pass rate.
+- Under-KPI review count.
+- Unique agents and call centers.
+- QA average by call center.
+- Most common Markdown / Partial criteria for coaching.
+
+Protected project data
+- Existing .git content was not modified.
+- Existing .env* files were not modified.

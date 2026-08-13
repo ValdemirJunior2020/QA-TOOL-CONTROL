@@ -11,6 +11,7 @@ export type AppPage =
   | 'review'
   | 'watchlist'
   | 'history'
+  | 'analytics'
   | 'admin'
 
 interface ShellProps {
@@ -31,6 +32,7 @@ function pageLabel(page: string): string {
   if (normalized === 'review') return 'New Review'
   if (normalized === 'watchlist') return 'Watch List'
   if (normalized === 'history') return 'Review History'
+  if (normalized === 'analytics') return 'Agent Performance'
   if (normalized === 'admin') return 'Admin Control'
 
   return page || 'QA Control Center'
@@ -102,6 +104,7 @@ export function Shell({
     { id: 'review', label: 'New Review' },
     { id: 'watchlist', label: '👁 Watch List' },
     { id: 'history', label: 'Review History' },
+    { id: 'analytics', label: '📈 Agent Performance', adminOnly: true },
     {
       id: 'admin',
       label: 'Admin Control',
