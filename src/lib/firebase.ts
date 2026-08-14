@@ -19,7 +19,7 @@ const firebase = requireFirebase()
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig)
 
 export const firebaseAuth = firebase.auth()
-// Keep Google sessions durable across refreshes and browser restarts.
+// Keep Firebase sessions durable across refreshes and browser restarts.
 void firebaseAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch((error: unknown) => {
   console.warn('Firebase auth persistence could not be set.', error)
 })
@@ -30,8 +30,41 @@ googleProvider.setCustomParameters({ prompt: 'select_account' })
 
 export const OWNER_EMAIL = 'infojr.83@gmail.com'
 export const BARBARA_EMAIL = 'barbara.kalchik8reserve@gmail.com'
-export const ADMIN_EMAILS = new Set([OWNER_EMAIL, BARBARA_EMAIL])
+export const APRIL_EMAIL = 'april.grantham@hotelplanner.com'
+export const JIM_EMAIL = 'jim.fryer@hotelplanner.com'
+export const KAREN_EMAIL = 'karen.caldas@hotelplanner.com'
+
+// Junior and Barbara are protected Super Admins.
+export const SUPER_ADMIN_EMAILS = new Set([
+  OWNER_EMAIL,
+  BARBARA_EMAIL,
+])
+
+// These accounts always map to the Admin role in the QA app.
+export const ADMIN_EMAILS = new Set([
+  OWNER_EMAIL,
+  BARBARA_EMAIL,
+  APRIL_EMAIL,
+  JIM_EMAIL,
+  KAREN_EMAIL,
+])
+
+// These HotelPlanner accounts can create a Firebase email/password login from
+// the app's first-time setup screen. No Google account is required.
+export const EMAIL_PASSWORD_ADMIN_EMAILS = new Set([
+  APRIL_EMAIL,
+  JIM_EMAIL,
+  KAREN_EMAIL,
+])
 
 export function normalizeEmail(value: unknown): string {
   return String(value ?? '').trim().toLowerCase()
+}
+
+export function isSuperAdminEmail(value: unknown): boolean {
+  return SUPER_ADMIN_EMAILS.has(normalizeEmail(value))
+}
+
+export function isAdminEmail(value: unknown): boolean {
+  return ADMIN_EMAILS.has(normalizeEmail(value))
 }

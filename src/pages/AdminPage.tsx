@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { AppSettings, CriterionDefinition, QaType, QaUser, UserRole } from '../types'
-
-const SUPER_ADMIN_EMAIL = 'infojr.83@gmail.com'
+import { ADMIN_EMAILS, OWNER_EMAIL, SUPER_ADMIN_EMAILS, normalizeEmail } from '../lib/firebase'
 const RETIRED_USER_EMAILS = new Set(['barbara.kalchik@hotelplanner.com'])
 
 interface AdminPageProps {
@@ -74,8 +73,9 @@ export function AdminPage({
     [visibleUsers],
   )
 
-  const currentUserEmail = currentUser.email.trim().toLowerCase()
-  const isSuperAdmin = currentUserEmail === SUPER_ADMIN_EMAIL
+  const currentUserEmail = normalizeEmail(currentUser.email)
+  const isSuperAdmin = SUPER_ADMIN_EMAILS.has(currentUserEmail)
+  const isOwner = currentUserEmail === OWNER_EMAIL
 
   // Keep the editable copy in sync with the latest settings returned by Firebase.
   useEffect(() => {
@@ -200,12 +200,12 @@ export function AdminPage({
           <p className="eyebrow">Administrator access</p>
           <h1>Control who can use and change the QA app.</h1>
           <p>
-            Only Junior and Barbara can be administrators. Other people can be added as evaluators or viewers, blocked, placed in Guided Mode, or limited to specific actions.
+            Junior and Barbara are Super Admins. April Grantham, Jim Fryer, and Karen Caldas are Admins. Other people can be added as evaluators or viewers and given only the access they need.
           </p>
         </div>
         <div className="admin-summary">
           <span>{admins.length} administrator accounts</span>
-          <strong>Junior + Barbara only</strong>
+          <strong>2 Super Admins · 3 Admins</strong>
         </div>
       </section>
 
@@ -227,15 +227,11 @@ export function AdminPage({
 
           <div className="team-grid">
             {visibleUsers.map((user) => {
-              const userEmail = user.email.trim().toLowerCase()
-              const isTargetSuperAdmin = userEmail === SUPER_ADMIN_EMAIL
-              const isCurrentUser = userEmail === currentUserEmail
-              const canManageTarget =
-                isSuperAdmin
-                  ? !isTargetSuperAdmin || isCurrentUser
-                  : user.role !== 'admin' || isCurrentUser
-              const canBlockTarget =
-                !isTargetSuperAdmin && (user.role !== 'admin' || isSuperAdmin)
+              const userEmail = normalizeEmail(user.email)
+              const isTargetSuperAdmin = SUPER_ADMIN_EMAILS.has(userEmail)
+              const isTargetAdmin = ADMIN_EMAILS.has(userEmail) || user.role === 'admin'
+              const canManageTarget = !isTargetSuperAdmin && (!isTargetAdmin || isSuperAdmin)
+              const canBlockTarget = !isTargetSuperAdmin && (!isTargetAdmin || isSuperAdmin)
 
               return (
                 <article key={user.email} className={`team-card ${!user.active ? 'disabled' : ''}`}>
@@ -245,7 +241,7 @@ export function AdminPage({
                       <h3>{user.displayName}</h3>
                       <p>{user.email}</p>
                     </div>
-                    <span className={`role-pill ${user.role}`}>{user.role}</span>
+                    <span className={`role-pill ${user.role}`}>{isTargetSuperAdmin ? 'Super Admin' : user.role}</span>
                   </div>
 
                   <div className="permission-chips">
@@ -262,17 +258,21 @@ export function AdminPage({
                       className="secondary-button compact"
                       onClick={() => {
                         if (!canManageTarget) {
-                          window.alert("Junior is the owner account. Barbara can't edit, block, delete, demote, or change Junior's permissions.")
+                          window.alert(
+                            isTargetSuperAdmin
+                              ? 'Junior and Barbara are protected Super Admin accounts.'
+                              : 'Only Junior or Barbara can change another administrator account.',
+                          )
                           return
                         }
                         setEditingUser(structuredClone(user))
                       }}
-                      title={!canManageTarget ? 'Junior is protected as the owner account.' : undefined}
+                      title={!canManageTarget ? (isTargetSuperAdmin ? 'Protected Super Admin' : 'Super Admin approval required') : undefined}
                     >
-                      {canManageTarget ? 'Edit' : 'Protected Owner'}
+                      {canManageTarget ? 'Edit' : isTargetSuperAdmin ? 'Protected Super Admin' : 'Super Admin Only'}
                     </button>
-                    {!canBlockTarget && isTargetSuperAdmin && !isSuperAdmin && (
-                      <button type="button" className="secondary-button compact" onClick={() => window.alert("Junior is the owner account. Barbara can't block, delete, disable, or destroy Junior's access.")}>Protected</button>
+                    {!canBlockTarget && isTargetSuperAdmin && (
+                      <button type="button" className="secondary-button compact" onClick={() => window.alert('Junior and Barbara are protected Super Admin accounts and cannot be blocked.')}>Protected</button>
                     )}
                     {canBlockTarget && (
                       <button
@@ -292,7 +292,7 @@ export function AdminPage({
         </section>
       )}
 
-      {section === 'team' && isSuperAdmin && (
+      {section === 'team' && isOwner && (
         <section className="panel firebase-migration-panel">
           <div className="panel-heading wrap-heading">
             <div>
@@ -499,18 +499,18 @@ export function AdminPage({
                     })
                   }
                   disabled={
-                    editingUser.email.trim().toLowerCase() === SUPER_ADMIN_EMAIL ||
+                    SUPER_ADMIN_EMAILS.has(normalizeEmail(editingUser.email)) ||
                     (!isSuperAdmin && editingUser.role === 'admin')
                   }
                 >
                   <option value="evaluator">Evaluator</option>
                   <option value="viewer">Viewer</option>
-                  {(isSuperAdmin || editingUser.role === 'admin') && (
+                  {(editingUser.role === 'admin' || (isSuperAdmin && ADMIN_EMAILS.has(normalizeEmail(editingUser.email)))) && (
                     <option value="admin">Admin</option>
                   )}
                 </select>
                 <em>
-                  Junior is the Super Admin and can change Barbara’s role and access.
+                  Junior and Barbara are protected Super Admins. Only a Super Admin can create or change other Admin accounts.
                 </em>
               </label>
               <label className="field wide-field">
@@ -522,7 +522,7 @@ export function AdminPage({
             <div className="permission-editor">
               <label className="toggle-row">
                 <input type="checkbox" checked={editingUser.active} onChange={(event) => setEditingUser({ ...editingUser, active: event.target.checked })} disabled={
-                    editingUser.email.trim().toLowerCase() === SUPER_ADMIN_EMAIL ||
+                    SUPER_ADMIN_EMAILS.has(normalizeEmail(editingUser.email)) ||
                     (!isSuperAdmin && editingUser.role === 'admin')
                   }
                 />
@@ -532,7 +532,7 @@ export function AdminPage({
                 <input type="checkbox" checked={editingUser.guidedMode} onChange={(event) => setEditingUser({ ...editingUser, guidedMode: event.target.checked })} disabled={
                     editingUser.role === 'admin' ||
                     (!isSuperAdmin &&
-                      editingUser.email.trim().toLowerCase() !== currentUserEmail)
+                      normalizeEmail(editingUser.email) !== currentUserEmail)
                   }
                 />
                 <span><strong>Guided Mode</strong><small>Adds friendly reminders, locked scoring fields, and a final checklist.</small></span>
@@ -587,10 +587,10 @@ export function AdminPage({
             )}
 
             {isSuperAdmin &&
-              editingUser.email.trim().toLowerCase() !== SUPER_ADMIN_EMAIL && (
+              !SUPER_ADMIN_EMAILS.has(normalizeEmail(editingUser.email)) && (
                 <div className="kind-note">
-                  Super Admin control is active. Junior can change this person’s role,
-                  permissions, Guided Mode, and active status, including for administrators.
+                  Super Admin control is active. Junior or Barbara can change this person’s role,
+                  permissions, Guided Mode, and active status, including regular administrators.
                 </div>
               )}
 

@@ -1,0 +1,37 @@
+QA CONTROL CENTER - EMAIL/PASSWORD ADMIN LOGIN
+
+ADMIN ROLES
+- Junior (infojr.83@gmail.com) = SUPER ADMIN
+- Barbara (barbara.kalchik8reserve@gmail.com) = SUPER ADMIN
+- April Grantham (april.grantham@hotelplanner.com) = ADMIN
+- Jim Fryer (jim.fryer@hotelplanner.com) = ADMIN
+- Karen Caldas (karen.caldas@hotelplanner.com) = ADMIN
+
+APRIL / JIM / KAREN DO NOT NEED GOOGLE ACCOUNTS.
+They can use the First-time setup tab on the QA Control Center login screen.
+The app only allows First-time setup for those three approved HotelPlanner email addresses.
+
+ONE-TIME FIREBASE SETUP REQUIRED
+1. Firebase Console -> Authentication -> Sign-in method.
+2. Enable Email/Password.
+3. Deploy the firestore.rules included with this project.
+
+If you use Firebase CLI from the project folder:
+  firebase deploy --only firestore:rules
+
+FIRST LOGIN FOR APRIL / JIM / KAREN
+1. Open QA Control Center.
+2. Click First-time setup.
+3. Enter the approved HotelPlanner email.
+4. Create a password (8+ characters).
+5. Open the verification email from Firebase and verify the address.
+6. Return to QA Control Center -> Sign in -> use email + password.
+
+The app automatically creates/repairs the approved admin profile in Firestore after the first verified login.
+
+SECURITY MODEL
+- Junior and Barbara are protected Super Admins and cannot be blocked or demoted in Admin Control.
+- April, Jim, and Karen are regular Admins.
+- Regular Admins cannot change/block Super Admins or other Admin accounts.
+- Junior or Barbara can block/unblock April, Jim, or Karen.
+- Google login remains available and unchanged.

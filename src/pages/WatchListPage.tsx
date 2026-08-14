@@ -133,7 +133,7 @@ export function WatchListPage({ user, agents, reviews, onSave, onSetStatus, onRe
         <div>
           <p className="eyebrow">Quality Radar</p>
           <h1>👁 Watch List Agents</h1>
-          <p className="muted">Everyone can view this list. Only Junior and Barbara can add, edit, clear, remove, or restore agents.</p>
+          <p className="muted">Everyone can view this list. Approved administrators can add, edit, clear, remove, or restore agents.</p>
         </div>
         <div className="watch-list-header-actions">
           <button className="secondary-button" type="button" onClick={() => void exportWatchListExcel(agents, reviews)}>Download Excel</button>

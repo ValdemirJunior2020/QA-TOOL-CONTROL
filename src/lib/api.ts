@@ -1,7 +1,7 @@
 import type { ApiResponse, AppSettings, AuthSession, BootstrapResponse, CriterionAnswer, QaUser, ReviewDraft, ReviewRecord, WatchListAgent, WatchListAgentInput, WatchListStatus } from '../types'
 import { DEFAULT_SETTINGS } from '../data/defaults'
 import { STARTER_WATCH_LIST } from '../data/watchListSeed'
-import { ADMIN_EMAILS, BARBARA_EMAIL, OWNER_EMAIL, firestore, normalizeEmail, realtimeDb } from './firebase'
+import { ADMIN_EMAILS, SUPER_ADMIN_EMAILS, firestore, normalizeEmail, realtimeDb } from './firebase'
 
 export interface PresenceUser {
   email: string
@@ -77,19 +77,60 @@ export function getFriendlyApiError(error: unknown): string {
 
 export function requiresNewLogin(_error: unknown): boolean { return false }
 
+const fullAdminPermissions = {
+  canSubmitReviews: true,
+  canViewHistory: true,
+  canEditAgentDetails: true,
+  canEditCriteriaSelections: true,
+  canEditCustomNotes: true,
+}
+
+function builtInAdminFromSession(storedUser: QaUser, email: string, exists: boolean): QaUser {
+  const displayNames: Record<string, string> = {
+    'infojr.83@gmail.com': 'Junior',
+    'barbara.kalchik8reserve@gmail.com': 'Barbara',
+    'april.grantham@hotelplanner.com': 'April Grantham',
+    'jim.fryer@hotelplanner.com': 'Jim Fryer',
+    'karen.caldas@hotelplanner.com': 'Karen Caldas',
+  }
+
+  const isSuperAdmin = SUPER_ADMIN_EMAILS.has(email)
+  return {
+    ...storedUser,
+    email,
+    displayName: storedUser.displayName || displayNames[email] || email,
+    role: 'admin',
+    // Super Admins are protected. Regular approved admins can still be blocked
+    // by a Super Admin through their Firestore user document.
+    active: isSuperAdmin ? true : (exists ? storedUser.active !== false : true),
+    guidedMode: false,
+    permissions: { ...fullAdminPermissions },
+  }
+}
+
 export async function bootstrap(session: AuthSession): Promise<BootstrapResponse> {
   try {
     const email = normalizeEmail(session.email)
-    const userSnap = await firestore.collection('users').doc(email).get()
+    const userRef = firestore.collection('users').doc(email)
+    const userSnap = await userRef.get()
     const fallback = viewerFromSession(session)
     const storedUser = userSnap.exists ? sanitizeUser(userSnap.data(), fallback) : fallback
 
-    // Junior is always the owner, even if a document was accidentally damaged.
-    const user: QaUser = email === OWNER_EMAIL
-      ? { ...storedUser, email, displayName: storedUser.displayName || 'Junior', role: 'admin', active: true, guidedMode: false, permissions: { canSubmitReviews: true, canViewHistory: true, canEditAgentDetails: true, canEditCriteriaSelections: true, canEditCustomNotes: true } }
+    const user: QaUser = ADMIN_EMAILS.has(email)
+      ? builtInAdminFromSession(storedUser, email, userSnap.exists)
       : storedUser
 
     if (!user.active) throw new Error('This QA app account is blocked. Contact Junior or Barbara.')
+
+    // Auto-provision/repair the five approved admin profiles after a verified
+    // Firebase login. This means April, Jim, and Karen do not need a Google account.
+    if (ADMIN_EMAILS.has(email)) {
+      await userRef.set({
+        ...user,
+        updatedAt: new Date().toISOString(),
+        updatedBy: email,
+      }, { merge: true })
+    }
 
     const settingsSnap = await firestore.collection('settings').doc('main').get()
     const settings = settingsSnap.exists ? { ...DEFAULT_SETTINGS, ...settingsSnap.data() } as AppSettings : DEFAULT_SETTINGS
@@ -98,7 +139,7 @@ export async function bootstrap(session: AuthSession): Promise<BootstrapResponse
     if (user.role === 'admin' && ADMIN_EMAILS.has(email)) {
       const usersSnap = await firestore.collection('users').get()
       users = usersSnap.docs.map((doc: any) => sanitizeUser(doc.data())).filter((item: QaUser) => Boolean(item.email))
-      if (!users.some((item) => normalizeEmail(item.email) === OWNER_EMAIL)) users.unshift(user)
+      if (!users.some((item) => normalizeEmail(item.email) === email)) users.unshift(user)
     }
 
     return { success: true, user, users, settings }
@@ -194,15 +235,27 @@ export async function saveReview(session: AuthSession, review: ReviewDraft): Pro
   } catch (error) { throw friendlyFirebaseError(error) }
 }
 
-function normalizeSavedUser(user: QaUser, actorEmail: string): QaUser {
+function normalizeSavedUser(user: QaUser): QaUser {
   const email = normalizeEmail(user.email)
-  if (email === OWNER_EMAIL) {
-    return { ...user, email, role: 'admin', active: true, guidedMode: false, permissions: { canSubmitReviews: true, canViewHistory: true, canEditAgentDetails: true, canEditCriteriaSelections: true, canEditCustomNotes: true } }
+  if (SUPER_ADMIN_EMAILS.has(email)) {
+    return {
+      ...user,
+      email,
+      role: 'admin',
+      active: true,
+      guidedMode: false,
+      permissions: { ...fullAdminPermissions },
+    }
   }
-  if (email === BARBARA_EMAIL && actorEmail === BARBARA_EMAIL) {
-    return { ...user, email, role: 'admin', active: true, guidedMode: false, permissions: { canSubmitReviews: true, canViewHistory: true, canEditAgentDetails: true, canEditCriteriaSelections: true, canEditCustomNotes: true } }
+  if (ADMIN_EMAILS.has(email)) {
+    return {
+      ...user,
+      email,
+      role: 'admin',
+      guidedMode: false,
+      permissions: { ...fullAdminPermissions },
+    }
   }
-  if (user.role === 'admin' && email !== BARBARA_EMAIL) throw new Error('Only Junior and Barbara can be administrators.')
   return { ...user, email }
 }
 
@@ -210,10 +263,31 @@ export async function saveUser(session: AuthSession, user: QaUser): Promise<ApiR
   try {
     const actor = normalizeEmail(session.email)
     const target = normalizeEmail(user.email)
-    if (!ADMIN_EMAILS.has(actor)) throw new Error('Only Junior or Barbara can perform this admin action.')
-    if (actor === BARBARA_EMAIL && target === OWNER_EMAIL) throw new Error("Junior is the owner account. Barbara can't edit, block, demote, delete, or change Junior's permissions.")
-    const saved = normalizeSavedUser({ ...user, email: target, updatedAt: new Date().toISOString(), updatedBy: actor }, actor)
-    if (target === OWNER_EMAIL && actor !== OWNER_EMAIL) throw new Error("Junior is the owner account. This account can't be changed by Barbara.")
+    const actorIsSuperAdmin = SUPER_ADMIN_EMAILS.has(actor)
+    const targetIsSuperAdmin = SUPER_ADMIN_EMAILS.has(target)
+    const targetIsAdmin = ADMIN_EMAILS.has(target)
+
+    if (!ADMIN_EMAILS.has(actor)) throw new Error('Only an administrator can perform this action.')
+
+    if (targetIsSuperAdmin) {
+      throw new Error('Junior and Barbara are protected Super Admin accounts and cannot be changed from Admin Control.')
+    }
+
+    if (user.role === 'admin' && !ADMIN_EMAILS.has(target)) {
+      throw new Error('The Admin role is reserved for Junior, Barbara, April, Jim, and Karen.')
+    }
+
+    if (targetIsAdmin && !actorIsSuperAdmin) {
+      throw new Error('Only Junior or Barbara can create or change an administrator account.')
+    }
+
+    const saved = normalizeSavedUser({
+      ...user,
+      email: target,
+      updatedAt: new Date().toISOString(),
+      updatedBy: actor,
+    })
+
     await firestore.collection('users').doc(target).set(saved, { merge: true })
     await addAudit('USER UPSERTED', session, target, saved)
     return { success: true, message: `${saved.displayName} was saved.`, user: saved }
@@ -224,10 +298,12 @@ export async function setUserBlocked(session: AuthSession, email: string, blocke
   try {
     const actor = normalizeEmail(session.email)
     const target = normalizeEmail(email)
-    if (!ADMIN_EMAILS.has(actor)) throw new Error('Only Junior or Barbara can perform this admin action.')
-    if (target === OWNER_EMAIL && actor !== OWNER_EMAIL) throw new Error("Junior is the owner account. Barbara can't block, delete, or disable Junior.")
-    if (target === OWNER_EMAIL) throw new Error("Junior is the owner account and can't be blocked.")
-    if (target === BARBARA_EMAIL && actor !== OWNER_EMAIL) throw new Error('Only Junior can block or change Barbara’s administrator account.')
+    const actorIsSuperAdmin = SUPER_ADMIN_EMAILS.has(actor)
+
+    if (!ADMIN_EMAILS.has(actor)) throw new Error('Only an administrator can perform this action.')
+    if (SUPER_ADMIN_EMAILS.has(target)) throw new Error('Junior and Barbara are protected Super Admin accounts and cannot be blocked.')
+    if (ADMIN_EMAILS.has(target) && !actorIsSuperAdmin) throw new Error('Only Junior or Barbara can block or unblock another administrator.')
+
     await firestore.collection('users').doc(target).set({ active: !blocked, updatedAt: new Date().toISOString(), updatedBy: actor }, { merge: true })
     await addAudit(blocked ? 'USER BLOCKED' : 'USER UNBLOCKED', session, target, {})
     return { success: true, message: `Account ${blocked ? 'blocked' : 'unblocked'}.` }
@@ -236,7 +312,7 @@ export async function setUserBlocked(session: AuthSession, email: string, blocke
 
 export async function saveSettings(session: AuthSession, settings: AppSettings): Promise<ApiResponse<AppSettings>> {
   try {
-    if (!ADMIN_EMAILS.has(normalizeEmail(session.email))) throw new Error('Only Junior or Barbara can change QA settings.')
+    if (!ADMIN_EMAILS.has(normalizeEmail(session.email))) throw new Error('Only an administrator can change QA settings.')
     await firestore.collection('settings').doc('main').set({ ...settings, updatedAt: new Date().toISOString(), updatedBy: normalizeEmail(session.email) })
     await addAudit('SETTINGS UPDATED', session, '', {})
     return { success: true, message: 'QA settings were saved to Firebase.', settings }
@@ -245,7 +321,7 @@ export async function saveSettings(session: AuthSession, settings: AppSettings):
 
 export async function markReviewEmailSent(session: AuthSession, review: ReviewRecord, sent: boolean): Promise<ApiResponse<ReviewRecord>> {
   try {
-    if (!ADMIN_EMAILS.has(normalizeEmail(session.email))) throw new Error('Only Junior or Barbara can change the email-sent status.')
+    if (!ADMIN_EMAILS.has(normalizeEmail(session.email))) throw new Error('Only an administrator can change the email-sent status.')
     const patch = { emailSent: sent, emailSentAt: sent ? new Date().toISOString() : '', emailSentBy: sent ? session.name : '', updatedAt: new Date().toISOString() }
     await firestore.collection('reviews').doc(review.id).update(patch)
     return { success: true, message: `Email marked ${sent ? 'sent' : 'not sent'}.`, review: { ...review, ...patch } }
@@ -330,7 +406,7 @@ function sanitizeWatchListAgent(id: string, raw: any): WatchListAgent {
 
 function assertWatchListAdmin(session: AuthSession) {
   if (!ADMIN_EMAILS.has(normalizeEmail(session.email))) {
-    throw new Error('Only Junior or Barbara can add, edit, remove, or restore Watch List agents.')
+    throw new Error('Only an administrator can add, edit, remove, or restore Watch List agents.')
   }
 }
 

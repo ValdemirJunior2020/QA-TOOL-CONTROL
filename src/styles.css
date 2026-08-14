@@ -67,6 +67,19 @@ h1 { letter-spacing: -0.035em; }
 .login-copy { color: #586174; line-height: 1.7; margin: 0 auto 28px; max-width: 430px; }
 .eyebrow { margin-bottom: 8px; color: #6755af; font-size: 12px; font-weight: 900; letter-spacing: 0.17em; text-transform: uppercase; }
 .google-button-slot { display: flex; justify-content: center; min-height: 44px; }
+
+.email-login-form { display: grid; gap: 14px; text-align: left; }
+.login-field span { color: #374151; font-weight: 800; }
+.login-divider { display: flex; align-items: center; gap: 14px; margin: 22px 0; color: #98a2b3; font-size: 11px; font-weight: 900; letter-spacing: .12em; }
+.login-divider::before, .login-divider::after { content: ''; height: 1px; flex: 1; background: #e5e7eb; }
+.login-mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 5px; border-radius: 14px; background: #f3f4f6; }
+.login-mode-switch button { border: 0; border-radius: 10px; padding: 10px 12px; background: transparent; color: #667085; font-weight: 900; }
+.login-mode-switch button.active { background: white; color: #24165f; box-shadow: 0 4px 12px rgba(36, 22, 95, .10); }
+.email-login-button { width: 100%; margin-top: 2px; }
+.login-reset-button { justify-self: center; color: #5b21b6; font-weight: 800; }
+.login-help { margin: 0; padding: 12px 14px; border-radius: 12px; background: #f7f5ff; color: #5b556f; font-size: 12px; line-height: 1.55; }
+.login-message { margin-top: 16px; text-align: left; }
+.success-banner { border: 1px solid #bbf7d0; background: #f0fdf4; color: #166534; border-radius: 14px; padding: 14px 16px; line-height: 1.5; }
 .setup-warning, .error-banner, .floating-auth-error, .error-summary {
   border: 1px solid #fecaca;
   background: #fff1f2;

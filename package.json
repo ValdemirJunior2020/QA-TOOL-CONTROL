@@ -14,19 +14,20 @@
     "test:e2e:install": "playwright install chromium"
   },
   "dependencies": {
+    "@tanstack/react-table": "^8.21.3",
     "exceljs": "^4.4.0",
+    "firebase-admin": "^14.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "recharts": "^3.10.1",
-    "@tanstack/react-table": "^8.21.3"
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^22.15.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.0",
     "typescript": "^5.8.3",
-    "vite": "^8.0.0",
-    "@playwright/test": "^1.62.1"
+    "vite": "^8.0.0"
   }
 }

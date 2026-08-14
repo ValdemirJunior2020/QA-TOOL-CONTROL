@@ -15,3 +15,7 @@ Thumbs.db
 .vscode/
 .idea/
 coverage/
+
+firebase-admin-key.json
+
+create-admin-users.cjs

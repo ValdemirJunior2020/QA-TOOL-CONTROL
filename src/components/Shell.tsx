@@ -5,6 +5,7 @@ import { WeatherWidget } from './WeatherWidget'
 import { DailyPupWidget } from './DailyPupWidget'
 import FunFactWidget from './FunFactWidget'
 import { QaWordHelper } from './QaWordHelper'
+import { SUPER_ADMIN_EMAILS, normalizeEmail } from '../lib/firebase'
 
 export type AppPage =
   | 'dashboard'
@@ -41,7 +42,9 @@ function pageLabel(page: string): string {
 function roleLabel(user: {
   role: string
   guidedMode?: boolean
+  email?: string
 }): string {
+  if (user.role === 'admin' && SUPER_ADMIN_EMAILS.has(normalizeEmail(user.email))) return 'Super Admin'
   if (user.role === 'admin') return 'Administrator'
   if (user.role === 'viewer') return 'Viewer'
   if (user.guidedMode) return 'Guided Evaluator'
@@ -327,7 +330,7 @@ export function Shell({
 
             <span>
               {user.role === 'admin'
-                ? 'Administrator'
+                ? (SUPER_ADMIN_EMAILS.has(normalizeEmail(user.email)) ? 'Super Admin' : 'Administrator')
                 : user.guidedMode
                   ? 'Evaluator · Guided Mode'
                   : 'Evaluator'}
