@@ -1,0 +1,32 @@
+QA CONTROL CENTER - CLOUDFLARE AUTO QA SETUP
+
+Frontend already deployed at:
+https://qa-tool-control.netlify.app/
+
+HOME PC
+1. Keep Ollama running.
+2. Run START-AUTO-QA.bat. The local service stays at http://127.0.0.1:8788.
+3. Install/run your Cloudflare Tunnel as a Windows service.
+4. In Cloudflare Tunnel, create a Published Application hostname, for example:
+   https://autoqa.yourdomain.com
+   Service/Origin: http://127.0.0.1:8788
+
+NETLIFY FRONTEND
+1. Open QA Control Center > Admin > Auto QA.
+2. In "Auto QA Service URL", paste ONLY the Cloudflare HTTPS hostname, for example:
+   https://autoqa.yourdomain.com
+3. Keep Ollama URL as http://127.0.0.1:11434 because Ollama is called by the HOME Auto QA service, not by the work browser.
+4. Click Save Auto QA Settings.
+5. Open Review. The service indicator should show online.
+
+CORS
+The Auto QA server allows the production frontend:
+https://qa-tool-control.netlify.app
+and local Vite development at localhost/127.0.0.1:5173.
+
+SECURITY
+Do NOT place a Cloudflare tunnel token in this project or in frontend code.
+If a tunnel token has been shared anywhere, rotate it in Cloudflare and install the replacement token only on the home PC.
+For production, protect the published hostname with Cloudflare Access or another authentication layer.
+
+Nothing in this setup requires changing an existing .env file.
