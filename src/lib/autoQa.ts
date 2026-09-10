@@ -13,6 +13,7 @@ export interface AutoQaCriterionResult {
 }
 
 export interface AutoQaResult {
+  runId: string
   transcript: string
   detectedItinerary: string
   detectedEmail: string
@@ -24,11 +25,25 @@ export interface AutoQaResult {
   criteria: AutoQaCriterionResult[]
 }
 
+export interface AutoQaHealth {
+  ok: boolean
+  message: string
+  checkedAt: string
+  checks?: {
+    server?: boolean
+    ollama?: boolean
+    model?: boolean
+    python?: boolean
+  }
+}
+
 export interface ImportedWorkbookText {
   fileName: string
   text: string
   sheets: string[]
 }
+
+const VALID_STATUSES = new Set<CriterionStatus>(['✓ Followed', '✕ Markdown', 'N/A', 'Partial', 'Critical'])
 
 export async function workbookToQaText(file: File): Promise<ImportedWorkbookText> {
   const bytes = await file.arrayBuffer()
@@ -118,6 +133,52 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
+function friendlyConnectionError(error: unknown): Error {
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return new Error('Auto QA service timed out. Check START-EVERYTHING.bat and the Cloudflare tunnel.')
+  }
+  if (error instanceof TypeError && /fetch/i.test(error.message)) {
+    return new Error('Auto QA service cannot be reached. Check START-EVERYTHING.bat and the Cloudflare tunnel. If you use a Quick Tunnel, its URL may have changed in Admin > Auto QA Service URL.')
+  }
+  return error instanceof Error ? error : new Error('Auto QA failed.')
+}
+
+function isAutoQaCriterionResult(value: unknown): value is AutoQaCriterionResult {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Record<string, unknown>
+  return Number.isFinite(Number(item.number)) &&
+    VALID_STATUSES.has(item.status as CriterionStatus) &&
+    typeof item.note === 'string' &&
+    Number.isFinite(Number(item.confidence)) &&
+    typeof item.transcriptEvidence === 'string' &&
+    typeof item.documentationEvidence === 'string' &&
+    typeof item.matrixEvidence === 'string'
+}
+
+function validateAutoQaResult(value: unknown, expectedRunId: string, expectedCriteriaNumbers: number[]): AutoQaResult {
+  if (!value || typeof value !== 'object') throw new Error('Auto QA returned an invalid result. Nothing was applied to the QA form.')
+  const result = value as Record<string, unknown>
+  if (result.runId !== expectedRunId) throw new Error('Auto QA returned a result from a different run. Nothing was applied to the QA form.')
+  if (typeof result.transcript !== 'string' || !result.transcript.trim()) throw new Error('Auto QA returned no transcript. Nothing was applied to the QA form.')
+  if (!Array.isArray(result.criteria) || !result.criteria.every(isAutoQaCriterionResult)) {
+    throw new Error('Auto QA returned invalid criterion results. Nothing was applied to the QA form.')
+  }
+
+  const expected = new Set(expectedCriteriaNumbers.map(Number))
+  const actual = new Set(result.criteria.map((item) => Number(item.number)))
+  if (expected.size !== actual.size || [...expected].some((number) => !actual.has(number))) {
+    throw new Error('Auto QA did not return exactly one result for every criterion. Nothing was applied to the QA form.')
+  }
+
+  const stringFields = ['detectedItinerary', 'detectedEmail', 'detectedPhone', 'detectedCallLength', 'detectedCallDate', 'summary'] as const
+  for (const field of stringFields) {
+    if (typeof result[field] !== 'string') throw new Error(`Auto QA returned an invalid ${field}. Nothing was applied to the QA form.`)
+  }
+  if (!Number.isFinite(Number(result.overallConfidence))) throw new Error('Auto QA returned an invalid confidence value. Nothing was applied to the QA form.')
+
+  return result as unknown as AutoQaResult
+}
+
 export async function runAutoQa(options: {
   audioFile?: File
   transcript?: string
@@ -127,38 +188,74 @@ export async function runAutoQa(options: {
   settings: AppSettings
 }): Promise<AutoQaResult> {
   const endpoint = resolveAutoQaEndpoint(options.settings)
-  const audioBase64 = options.audioFile ? await fileToBase64(options.audioFile) : undefined
   const criteria = options.settings.criteria[options.qaType]
-  const response = await fetch(`${endpoint.replace(/\/$/, '')}/api/auto-qa`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      audioBase64,
-      audioFileName: options.audioFile?.name || '',
-      transcript: options.transcript || '',
-      documentation: options.documentation || '',
-      phase: options.phase || 'full',
-      qaType: options.qaType,
-      criteria,
-      matrixText: options.settings.autoQa?.matrixText || '',
-      salesQaFormText: options.settings.autoQa?.salesQaFormText || '',
-      ollamaUrl: options.settings.autoQa?.ollamaUrl || 'http://127.0.0.1:11434',
-      ollamaModel: options.settings.autoQa?.ollamaModel || 'qwen3:8b',
-    }),
-  })
+  const runId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `autoqa-${Date.now()}-${Math.random().toString(16).slice(2)}`
 
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok || !payload?.success) throw new Error(payload?.message || 'Auto QA failed.')
-  return payload.data as AutoQaResult
+  try {
+    const audioBase64 = options.audioFile ? await fileToBase64(options.audioFile) : undefined
+    const controller = new AbortController()
+    const response = await fetch(`${endpoint.replace(/\/$/, '')}/api/auto-qa`, {
+      method: 'POST',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      body: JSON.stringify({
+        runId,
+        audioBase64,
+        audioFileName: options.audioFile?.name || '',
+        audioIdentity: options.audioFile ? `${options.audioFile.name}|${options.audioFile.size}|${options.audioFile.lastModified}|${options.audioFile.type}` : '',
+        transcript: options.transcript || '',
+        documentation: options.documentation || '',
+        phase: options.phase || 'full',
+        qaType: options.qaType,
+        criteria,
+        matrixText: options.settings.autoQa?.matrixText || '',
+        salesQaFormText: options.settings.autoQa?.salesQaFormText || '',
+        ollamaUrl: options.settings.autoQa?.ollamaUrl || 'http://127.0.0.1:11434',
+        ollamaModel: options.settings.autoQa?.ollamaModel || 'qwen3:8b',
+      }),
+    })
+
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || payload?.success !== true) {
+      throw new Error(payload?.message || `Auto QA failed with HTTP ${response.status}.`)
+    }
+    return validateAutoQaResult(payload.data, runId, criteria.map((criterion) => Number(criterion.number)))
+  } catch (error) {
+    throw friendlyConnectionError(error)
+  }
 }
 
-export async function checkAutoQaService(settings: AppSettings): Promise<{ ok: boolean; message: string }> {
+export async function checkAutoQaService(settings: AppSettings): Promise<AutoQaHealth> {
+  const checkedAt = new Date().toISOString()
   try {
     const endpoint = resolveAutoQaEndpoint(settings)
-    const response = await fetch(`${endpoint.replace(/\/$/, '')}/health`)
-    const payload = await response.json().catch(() => ({}))
-    return { ok: response.ok && payload?.ok === true, message: payload?.message || (response.ok ? 'Auto QA service is online.' : 'Auto QA service is offline.') }
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 5000)
+    try {
+      const params = new URLSearchParams({
+        ollamaUrl: settings.autoQa?.ollamaUrl || 'http://127.0.0.1:11434',
+        ollamaModel: settings.autoQa?.ollamaModel || 'qwen3:8b',
+      })
+      const response = await fetch(`${endpoint.replace(/\/$/, '')}/health?${params.toString()}`, {
+        cache: 'no-store',
+        signal: controller.signal,
+        headers: { 'Cache-Control': 'no-store' },
+      })
+      const payload = await response.json().catch(() => ({}))
+      return {
+        ok: response.ok && payload?.ok === true,
+        message: payload?.message || (response.ok ? 'Auto QA service is online.' : 'Auto QA service is offline.'),
+        checkedAt,
+        checks: payload?.checks,
+      }
+    } finally {
+      window.clearTimeout(timeout)
+    }
   } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : 'Auto QA service is offline.' }
+    const friendly = friendlyConnectionError(error)
+    return { ok: false, message: friendly.message, checkedAt }
   }
 }
