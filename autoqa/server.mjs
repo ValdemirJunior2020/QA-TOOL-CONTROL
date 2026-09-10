@@ -3,7 +3,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
 
 const PORT = Number(process.env.AUTO_QA_PORT || 8788)
 const HOST = '127.0.0.1'
@@ -65,10 +64,11 @@ async function transcribeAudio(audioBase64, fileName) {
     if (!line) throw new Error('Whisper returned an empty transcript.')
     return JSON.parse(line)
   } finally {
+    // Uploaded call audio is always temporary and is deleted after transcription,
+    // even if the later QA step fails.
     fs.rmSync(tempDir, { recursive: true, force: true })
   }
 }
-
 
 function matrixKeywords(value) {
   const stop = new Set(['the','and','for','that','with','from','this','have','will','was','are','but','not','you','your','guest','agent','call','hotel','reservation','booking','please','into','when','then','they','their','them','our','has','had','can','could','would','should','about','only','need','needs'])
@@ -102,15 +102,25 @@ function selectRelevantMatrix(matrixText, evidenceText) {
 function buildPrompt(input, transcript) {
   const criteria = (input.criteria || []).map((c) => `${c.number}. ${c.name} (${c.points} points)\nDefinition: ${c.notes || ''}`).join('\n\n')
   const docs = String(input.documentation || '').slice(0, 70000)
+  const phase = ['call', 'documentation', 'full'].includes(input.phase) ? input.phase : 'full'
   const matrix = selectRelevantMatrix(input.matrixText, `${transcript}\n${docs}`)
   const sales = input.qaType === 'Sales' ? String(input.salesQaFormText || '').slice(0, 24000) : ''
-  return `You are a strict HotelPlanner Quality Assurance evaluator. Grade only from the evidence provided. Never invent facts. Use the active QA criteria and active Service Matrix as the source of truth. Documentation must be evaluated together with what happened on the call. If evidence is missing, lower confidence and choose the most defensible status.\n\nSTATUS RULES:\n- ✓ Followed = criterion was met.\n- ✕ Markdown = criterion was not met.\n- Partial = criterion was partly met.\n- N/A = criterion truly does not apply.\n- Critical may ONLY be used for Matrix Compliance or Documentation Quality when the evidence supports a critical failure.\n- A Matrix Compliance markdown that reflects a required Matrix process not followed should be Critical.\n- Do not mark a criterion down for information that cannot reasonably be observed in the call/documentation.\n- Notes must be short, specific, professional, and editable by a human reviewer.\n- Evidence excerpts must be concise and copied/paraphrased from the supplied material only.\n\nQA TYPE: ${input.qaType}\n\nQA CRITERIA:\n${criteria}\n\nACTIVE SERVICE MATRIX:\n${matrix || '[No matrix loaded]'}\n\n${sales ? `ACTIVE GROUP SALES QA FORM:\n${sales}\n\n` : ''}CALL TRANSCRIPT:\n${String(transcript || '').slice(0, 70000)}\n\nDOCUMENTATION / ITINERARY NOTES:\n${docs || '[No documentation pasted]'}\n\nReturn one result for every QA criterion. Detect an itinerary beginning with H if present. Detect call date only if stated with confidence. Calculate confidence from 0-100. Do not mention AI, Ollama, automation, or model names in QA notes.`
+
+  const phaseInstruction = phase === 'call'
+    ? `PHASE: CALL REVIEW ONLY. Grade criteria from the call transcript only. Do not penalize Documentation Quality, Group Request Documentation Accuracy, or any criterion that requires back-office notes because documentation has not been supplied yet. Return those documentation-dependent criteria as N/A with low confidence; the human workflow will leave them for the documentation step.`
+    : phase === 'documentation'
+      ? `PHASE: DOCUMENTATION REVIEW. Use the transcript as context, but focus on documentation-dependent criteria and whether the notes accurately reflect the action taken. For non-documentation criteria, return the most defensible result but the frontend will preserve the prior call grading.`
+      : `PHASE: FULL REVIEW. Evaluate both the call and the supplied documentation.`
+
+  return `You are a strict HotelPlanner Quality Assurance evaluator. Grade only from the evidence provided. Never invent facts. Use the active QA criteria and active Service Matrix as the source of truth.\n\n${phaseInstruction}\n\nIDENTIFIER EXTRACTION:\n- Extract an HotelPlanner itinerary beginning with H only if clearly present in the transcript or documentation.\n- Extract the guest email only if clearly stated.\n- Extract the guest phone number only if clearly stated.\n- If any identifier is not present, return an empty string. Never guess.\n\nSTATUS RULES:\n- ✓ Followed = criterion was met.\n- ✕ Markdown = criterion was not met.\n- Partial = criterion was partly met.\n- N/A = criterion truly does not apply or, during call-only phase, depends on documentation not yet supplied.\n- Critical may ONLY be used for Matrix Compliance or Documentation Quality when the evidence supports a critical failure.\n- A Matrix Compliance markdown that reflects a required Matrix process not followed should be Critical.\n- Do not mark a criterion down for information that cannot reasonably be observed in the current phase.\n- Notes must be short, specific, professional, and editable by a human reviewer.\n- Evidence excerpts must be concise and copied/paraphrased from the supplied material only.\n\nQA TYPE: ${input.qaType}\n\nQA CRITERIA:\n${criteria}\n\nACTIVE SERVICE MATRIX:\n${matrix || '[No matrix loaded]'}\n\n${sales ? `ACTIVE GROUP SALES QA FORM:\n${sales}\n\n` : ''}CALL TRANSCRIPT:\n${String(transcript || '').slice(0, 70000)}\n\nDOCUMENTATION / ITINERARY NOTES:\n${docs || '[No documentation supplied in this phase]'}\n\nReturn one result for every QA criterion. Calculate confidence from 0-100. Do not mention AI, Ollama, automation, or model names in QA notes.`
 }
 
 const resultSchema = {
   type: 'object',
   properties: {
     detectedItinerary: { type: 'string' },
+    detectedEmail: { type: 'string' },
+    detectedPhone: { type: 'string' },
     detectedCallLength: { type: 'string' },
     detectedCallDate: { type: 'string' },
     overallConfidence: { type: 'number' },
@@ -133,7 +143,7 @@ const resultSchema = {
       },
     },
   },
-  required: ['detectedItinerary','detectedCallLength','detectedCallDate','overallConfidence','summary','criteria'],
+  required: ['detectedItinerary','detectedEmail','detectedPhone','detectedCallLength','detectedCallDate','overallConfidence','summary','criteria'],
 }
 
 async function callOllama(input, transcript) {
@@ -147,7 +157,7 @@ async function callOllama(input, transcript) {
       format: resultSchema,
       options: { temperature: 0.05, num_ctx: 32768 },
       messages: [
-        { role: 'system', content: 'You are a precise QA auditor. Follow the supplied policy, criteria, evidence, and JSON schema exactly.' },
+        { role: 'system', content: 'You are a precise QA auditor. Follow the supplied policy, criteria, evidence, phase instructions, and JSON schema exactly.' },
         { role: 'user', content: buildPrompt(input, transcript) },
       ],
     }),
