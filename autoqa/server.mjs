@@ -99,6 +99,45 @@ function selectRelevantMatrix(matrixText, evidenceText) {
   return result.slice(0, 24000)
 }
 
+function hasRealMatrixEvidence(value) {
+  const text = String(value || '').trim()
+  return Boolean(text) && !/^(n\/?a|none|no matrix|not applicable|no direct matrix evidence)[.!\s]*$/i.test(text)
+}
+
+function normalizeMatrixComplianceResult(input, result) {
+  if (!result || !Array.isArray(result.criteria)) return result
+  const matrixCriterion = (input.criteria || []).find((criterion) => /matrix compliance/i.test(String(criterion?.name || '')))
+  if (!matrixCriterion) return result
+
+  const item = result.criteria.find((criterion) => Number(criterion?.number) === Number(matrixCriterion.number))
+  if (!item) return result
+
+  const matrixEvidencePresent = hasRealMatrixEvidence(item.matrixEvidence)
+  const status = String(item.status || '')
+
+  // Zero-tolerance Matrix rule: once a Matrix requirement is confirmed to apply,
+  // any failure or partial failure is a Critical and therefore makes the QA 0%.
+  if (matrixEvidencePresent && (status === '✕ Markdown' || status === 'Partial' || status === 'Critical')) {
+    item.status = 'Critical'
+    const reason = String(item.criticalReason || '').trim()
+    if (!reason || /^(n\/?a|none|not applicable)$/i.test(reason)) {
+      item.criticalReason = 'Required Matrix process was not followed'
+    }
+    return result
+  }
+
+  // Never create a Matrix Critical from guesswork. If the model cannot point to
+  // an applicable Matrix rule, leave it for human review instead of inventing a violation.
+  if (status === 'Critical' && !matrixEvidencePresent) {
+    item.status = 'N/A'
+    item.criticalReason = ''
+    item.note = 'No applicable Matrix requirement was identified with enough evidence. Manual review recommended.'
+    item.confidence = Math.min(Number(item.confidence || 0), 50)
+  }
+
+  return result
+}
+
 function buildPrompt(input, transcript) {
   const criteria = (input.criteria || []).map((c) => `${c.number}. ${c.name} (${c.points} points)\nDefinition: ${c.notes || ''}`).join('\n\n')
   const docs = String(input.documentation || '').slice(0, 70000)
@@ -112,7 +151,7 @@ function buildPrompt(input, transcript) {
       ? `PHASE: DOCUMENTATION REVIEW. Use the transcript as context, but focus on documentation-dependent criteria and whether the notes accurately reflect the action taken. For non-documentation criteria, return the most defensible result but the frontend will preserve the prior call grading.`
       : `PHASE: FULL REVIEW. Evaluate both the call and the supplied documentation.`
 
-  return `You are a strict HotelPlanner Quality Assurance evaluator. Grade only from the evidence provided. Never invent facts. Use the active QA criteria and active Service Matrix as the source of truth.\n\n${phaseInstruction}\n\nIDENTIFIER EXTRACTION:\n- Extract an HotelPlanner itinerary beginning with H only if clearly present in the transcript or documentation.\n- Extract the guest email only if clearly stated.\n- Extract the guest phone number only if clearly stated.\n- If any identifier is not present, return an empty string. Never guess.\n\nSTATUS RULES:\n- ✓ Followed = criterion was met.\n- ✕ Markdown = criterion was not met.\n- Partial = criterion was partly met.\n- N/A = criterion truly does not apply or, during call-only phase, depends on documentation not yet supplied.\n- Critical may ONLY be used for Matrix Compliance or Documentation Quality when the evidence supports a critical failure.\n- A Matrix Compliance markdown that reflects a required Matrix process not followed should be Critical.\n- Do not mark a criterion down for information that cannot reasonably be observed in the current phase.\n- Notes must be short, specific, professional, and editable by a human reviewer.\n- Evidence excerpts must be concise and copied/paraphrased from the supplied material only.\n\nQA TYPE: ${input.qaType}\n\nQA CRITERIA:\n${criteria}\n\nACTIVE SERVICE MATRIX:\n${matrix || '[No matrix loaded]'}\n\n${sales ? `ACTIVE GROUP SALES QA FORM:\n${sales}\n\n` : ''}CALL TRANSCRIPT:\n${String(transcript || '').slice(0, 70000)}\n\nDOCUMENTATION / ITINERARY NOTES:\n${docs || '[No documentation supplied in this phase]'}\n\nReturn one result for every QA criterion. Calculate confidence from 0-100. Do not mention AI, Ollama, automation, or model names in QA notes.`
+  return `You are a strict HotelPlanner Quality Assurance evaluator. Grade only from the evidence provided. Never invent facts. Use the active QA criteria and active Service Matrix as the source of truth.\n\n${phaseInstruction}\n\nIDENTIFIER EXTRACTION:\n- Extract an HotelPlanner itinerary beginning with H only if clearly present in the transcript or documentation.\n- Extract the guest email only if clearly stated.\n- Extract the guest phone number only if clearly stated.\n- If any identifier is not present, return an empty string. Never guess.\n\nMATRIX COMPLIANCE — ZERO TOLERANCE:\n- Matrix Compliance is zero tolerance whenever an applicable Matrix rule is confirmed.\n- If the applicable Matrix requires a process, tool, escalation, Slack action, Refund Queue action, ticket, supervisor step, hotel/supplier contact, voucher/rebooking step, FOC step, timeline, or any other required action and the agent fails to follow it, Matrix Compliance MUST be Critical.\n- Do not use Partial or Markdown for a confirmed Matrix miss. Use Critical.\n- A Matrix Critical makes the entire QA 0% / FAIL.\n- For every Matrix Critical you MUST include the actual applicable Matrix requirement in matrixEvidence.\n- criticalReason must never be N/A for a Matrix Critical. Use 'Required Matrix process was not followed' unless a more specific valid reason is available.\n- If you cannot identify an applicable Matrix row/rule from the supplied Matrix, do NOT invent a Matrix violation. Use N/A with low confidence and state that manual Matrix review is needed.\n\nSTATUS RULES:\n- ✓ Followed = criterion was met.\n- ✕ Markdown = criterion was not met, except Matrix Compliance where any confirmed miss is Critical.\n- Partial = criterion was partly met, except Matrix Compliance where any confirmed partial miss is Critical.\n- N/A = criterion truly does not apply or, during call-only phase, depends on documentation not yet supplied.\n- Critical may ONLY be used for Matrix Compliance or Documentation Quality when the evidence supports a critical failure.\n- Do not mark a criterion down for information that cannot reasonably be observed in the current phase.\n- Notes must be short, specific, professional, and editable by a human reviewer.\n- Evidence excerpts must be concise and copied/paraphrased from the supplied material only.\n\nQA TYPE: ${input.qaType}\n\nQA CRITERIA:\n${criteria}\n\nACTIVE SERVICE MATRIX:\n${matrix || '[No matrix loaded]'}\n\n${sales ? `ACTIVE GROUP SALES QA FORM:\n${sales}\n\n` : ''}CALL TRANSCRIPT:\n${String(transcript || '').slice(0, 70000)}\n\nDOCUMENTATION / ITINERARY NOTES:\n${docs || '[No documentation supplied in this phase]'}\n\nReturn one result for every QA criterion. Calculate confidence from 0-100. Do not mention AI, Ollama, automation, or model names in QA notes.`
 }
 
 const resultSchema = {
@@ -167,7 +206,7 @@ async function callOllama(input, transcript) {
   const content = payload?.message?.content
   if (!content) throw new Error('Ollama returned no QA result.')
   const parsed = typeof content === 'string' ? JSON.parse(content) : content
-  return parsed
+  return normalizeMatrixComplianceResult(input, parsed)
 }
 
 const server = http.createServer(async (req, res) => {
