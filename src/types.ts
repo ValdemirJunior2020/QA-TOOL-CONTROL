@@ -85,6 +85,8 @@ export interface ReviewDraft {
   callId: string
   qaType: QaType
   confirmationNumber: string
+  guestEmail?: string
+  guestPhone?: string
   callLength: string
   callDate: string
   criteria: CriterionAnswer[]
@@ -103,6 +105,8 @@ export interface ReviewRecord {
   callCenter: string
   callId: string
   itineraryNumber: string
+  guestEmail?: string
+  guestPhone?: string
   emailSent: boolean
   emailSentAt?: string
   emailSentBy?: string
