@@ -167,6 +167,8 @@ export function createReviewDraft(settings: AppSettings, evaluator: string, qaTy
     callId: '',
     qaType,
     confirmationNumber: '',
+    guestEmail: '',
+    guestPhone: '',
     callLength: '',
     callDate: '',
     criteria: createCriterionAnswers(settings, qaType),
