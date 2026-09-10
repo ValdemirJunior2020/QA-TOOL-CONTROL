@@ -15,6 +15,8 @@ export interface AutoQaCriterionResult {
 export interface AutoQaResult {
   transcript: string
   detectedItinerary: string
+  detectedEmail: string
+  detectedPhone: string
   detectedCallLength: string
   detectedCallDate: string
   overallConfidence: number
@@ -86,7 +88,6 @@ export function tryExtractSalesCriteria(text: string) {
   return unique.length >= 3 && total > 0 ? unique : []
 }
 
-
 function resolveAutoQaEndpoint(settings: AppSettings): string {
   const configured = String(settings.autoQa?.serviceUrl || '').trim().replace(/\/$/, '')
   const isBrowser = typeof window !== 'undefined'
@@ -120,7 +121,8 @@ function fileToBase64(file: File): Promise<string> {
 export async function runAutoQa(options: {
   audioFile?: File
   transcript?: string
-  documentation: string
+  documentation?: string
+  phase?: 'call' | 'documentation' | 'full'
   qaType: QaType
   settings: AppSettings
 }): Promise<AutoQaResult> {
@@ -134,7 +136,8 @@ export async function runAutoQa(options: {
       audioBase64,
       audioFileName: options.audioFile?.name || '',
       transcript: options.transcript || '',
-      documentation: options.documentation,
+      documentation: options.documentation || '',
+      phase: options.phase || 'full',
       qaType: options.qaType,
       criteria,
       matrixText: options.settings.autoQa?.matrixText || '',
