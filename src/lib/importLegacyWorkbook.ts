@@ -184,18 +184,31 @@ function userFromRow(data: Record<string, unknown>): QaUser | null {
 
 function settingsFromSheet(sheet?: ExcelJS.Worksheet): AppSettings {
   if (!sheet) return DEFAULT_SETTINGS
+
   const values: Record<string, any> = {}
+
   for (let row = 2; row <= sheet.rowCount; row += 1) {
     const key = cellText(sheet.getCell(row, 1).value)
     const raw = cellText(sheet.getCell(row, 2).value)
+
     if (!key || !raw) continue
-    try { values[key] = JSON.parse(raw) } catch { values[key] = raw }
+
+    try {
+      values[key] = JSON.parse(raw)
+    } catch {
+      values[key] = raw
+    }
   }
+
   return {
     criteria: values.criteria || DEFAULT_SETTINGS.criteria,
     callCenters: cleanCallCenters(values.callCenters || DEFAULT_SETTINGS.callCenters),
     statusOptions: values.statusOptions || DEFAULT_SETTINGS.statusOptions,
     rules: { ...DEFAULT_SETTINGS.rules, ...(values.rules || {}) },
+    autoQa: {
+      ...DEFAULT_SETTINGS.autoQa,
+      ...(values.autoQa || {}),
+    },
   }
 }
 
@@ -244,49 +257,121 @@ export async function importLegacyWorkbookToFirebase(
     const review = reviewFromRow(rowObject(reviewSheet, row), row)
     if (review && !isRetiredCallCenter(review.callCenter)) reviews.push(review)
     else skippedRows += 1
-  }
+   }
 
   applyEmailAudit(workbook, reviews)
 
   const userSheet = workbook.getWorksheet('QA App Users')
+
   const users: QaUser[] = []
+
   if (userSheet) {
     for (let row = 2; row <= userSheet.rowCount; row += 1) {
       const user = userFromRow(rowObject(userSheet, row))
+
       if (user) users.push(user)
     }
   }
+ const settings = settingsFromSheet(
+  workbook.getWorksheet('QA App Settings')
+)
 
-  const settings = settingsFromSheet(workbook.getWorksheet('QA App Settings'))
-  const totalWrites = Math.max(1, reviews.length + users.length + 2)
-  let completed = 0
-  const report = (label: string) => onProgress?.(10 + Math.round((completed / totalWrites) * 88), label)
+const totalWrites = Math.max(
+  1,
+  reviews.length + users.length + 2
+)
 
-  // Users and settings first so permissions exist before normal use begins.
-  for (const user of users) {
-    await firestore.collection('users').doc(user.email).set(user, { merge: true })
-    completed += 1
-    report('Importing evaluator access')
-  }
-  await firestore.collection('settings').doc('main').set({ ...settings, migratedAt: new Date().toISOString(), migratedBy: session.email })
+let completed = 0
+
+const report = (label: string) => {
+  onProgress?.(
+    10 + Math.round((completed / totalWrites) * 88),
+    label
+  )
+}
+
+// Users and settings first so permissions exist before normal use begins.
+for (const user of users) {
+  await firestore
+    .collection('users')
+    .doc(user.email)
+    .set(user, { merge: true })
+
   completed += 1
+  report('Importing evaluator access')
+}
 
-  // Firestore batches have a 500-write limit. 400 leaves room for future batch metadata.
-  for (let start = 0; start < reviews.length; start += 400) {
-    const chunk = reviews.slice(start, start + 400)
-    const batch = firestore.batch()
-    chunk.forEach((review) => {
-      batch.set(firestore.collection('reviews').doc(review.id), { ...review, legacyImported: true, legacyRowNumber: review.rowNumber }, { merge: true })
-    })
-    await batch.commit()
-    completed += chunk.length
-    report(`Importing reviews ${Math.min(start + chunk.length, reviews.length)} of ${reviews.length}`)
-  }
+await firestore
+  .collection('settings')
+  .doc('main')
+  .set(
+    {
+      ...settings,
+      migratedAt: new Date().toISOString(),
+      migratedBy: session.email,
+    },
+    { merge: true }
+  )
 
-  const nextRowNumber = Math.max(2, ...reviews.map((review) => Number(review.rowNumber || 0) + 1))
-  await firestore.collection('meta').doc('reviews').set({ nextRowNumber, legacyRowsImported: reviews.length, migratedAt: new Date().toISOString() }, { merge: true })
-  completed += 1
-  onProgress?.(100, 'Firebase migration complete')
+completed += 1
 
-  return { reviews: reviews.length, users: users.length, settings: true, skippedRows }
+// Firestore batches have a 500-write limit.
+// 400 leaves room for future batch metadata.
+for (let start = 0; start < reviews.length; start += 400) {
+  const chunk = reviews.slice(start, start + 400)
+  const batch = firestore.batch()
+
+  chunk.forEach((review) => {
+    batch.set(
+      firestore.collection('reviews').doc(review.id),
+      {
+        ...review,
+        legacyImported: true,
+        legacyRowNumber: review.rowNumber,
+      },
+      { merge: true }
+    )
+  })
+
+  await batch.commit()
+
+  completed += chunk.length
+
+  report(
+    `Importing reviews ${Math.min(
+      start + chunk.length,
+      reviews.length
+    )} of ${reviews.length}`
+  )
+}
+
+const nextRowNumber = Math.max(
+  2,
+  ...reviews.map(
+    (review) => Number(review.rowNumber || 0) + 1
+  )
+)
+
+await firestore
+  .collection('meta')
+  .doc('reviews')
+  .set(
+    {
+      nextRowNumber,
+      legacyRowsImported: reviews.length,
+      migratedAt: new Date().toISOString(),
+    },
+    { merge: true }
+  )
+
+completed += 1
+
+onProgress?.(100, 'Firebase migration complete')
+
+return {
+  reviews: reviews.length,
+  users: users.length,
+  settings: true,
+  skippedRows,
+}
 }
