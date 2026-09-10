@@ -27,6 +27,8 @@ interface ValidationState {
   fieldErrors: Record<string, string>
 }
 
+type AutoQaStage = 'ready' | 'booking-question' | 'notes-choice' | 'paste-docs' | 'manual-docs' | 'skipped-docs' | 'complete'
+
 function normalizeCallId(value: string): string {
   const cleaned = value.replace(/\s+/g, '')
   if (/^ca/i.test(cleaned)) return `CA${cleaned.slice(2)}`
@@ -40,6 +42,10 @@ function isCriticalCriterion(name: string): boolean {
 
 function isMatrixComplianceCriterion(name: string): boolean {
   return name.toLowerCase().includes('matrix compliance')
+}
+
+function isDocumentationCriterion(name: string): boolean {
+  return name.toLowerCase().includes('documentation')
 }
 
 function criticalReasonsFor(name: string): string[] {
@@ -132,6 +138,7 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
   const [autoQaEvidence, setAutoQaEvidence] = useState<Record<number, AutoQaCriterionResult>>({})
   const [autoQaServiceOnline, setAutoQaServiceOnline] = useState<boolean | null>(null)
   const [manualOverrides, setManualOverrides] = useState<Set<number>>(() => new Set())
+  const [autoQaStage, setAutoQaStage] = useState<AutoQaStage>('ready')
   const draftKey = `qa-review-draft:${user.email}:${initialQaType.toLowerCase()}`
 
   useEffect(() => {
@@ -172,7 +179,43 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
     return () => { cancelled = true }
   }, [settings])
 
-  const executeAutoQa = async (recheck = false) => {
+  const applyAiCriteria = (
+    current: ReviewDraft,
+    results: AutoQaCriterionResult[],
+    mode: 'call' | 'documentation' | 'full',
+    protectManualEdits: boolean,
+  ): CriterionAnswer[] => {
+    const byNumber = new Map(results.map((item) => [Number(item.number), item]))
+    return current.criteria.map((criterion) => {
+      const documentationCriterion = isDocumentationCriterion(criterion.name)
+      if (mode === 'call' && documentationCriterion) return criterion
+      if (mode === 'documentation' && !documentationCriterion) return criterion
+
+      const ai = byNumber.get(Number(criterion.number))
+      if (!ai || (protectManualEdits && manualOverrides.has(Number(criterion.number)))) return criterion
+
+      let status = ai.status
+      let criticalReason = ai.criticalReason || ''
+      if (status === '✕ Markdown' && current.qaType !== 'Groups' && isMatrixComplianceCriterion(criterion.name)) {
+        status = 'Critical'
+        criticalReason = criticalReason || 'Required Matrix process was not followed'
+      }
+      if (status === 'Critical' && !isCriticalCriterion(criterion.name)) status = '✕ Markdown'
+
+      return {
+        ...criterion,
+        status,
+        customNote: ai.note || '',
+        criticalReason: status === 'Critical'
+          ? (criticalReason || (criterion.name.toLowerCase().includes('documentation quality') ? 'Other Documentation Critical' : 'Other Matrix Critical'))
+          : '',
+        partialPoints: criterion.points / 2,
+        autoPoints: pointsForStatus(criterion.points, status),
+      }
+    })
+  }
+
+  const executeCallAutoQa = async (recheck = false) => {
     if (!settings.autoQa?.enabled) {
       setAutoQaMessage('Auto QA is disabled in Admin settings.')
       return
@@ -181,59 +224,116 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
       setAutoQaMessage('Choose an audio file first.')
       return
     }
-    if (!documentation.trim()) {
-      setAutoQaMessage('Paste the itinerary / documentation notes before finishing Auto QA.')
+    if (recheck && !autoQaTranscript) {
+      setAutoQaMessage('Run the call QA first.')
       return
     }
+
     setAutoQaBusy(true)
-    setAutoQaMessage(recheck ? 'Rechecking the QA with the current transcript, documentation and Matrix…' : 'Transcribing the call and reviewing it against the QA form, documentation and Matrix…')
+    setAutoQaMessage(recheck ? 'Rechecking the call QA from the transcript…' : 'Transcribing the call and running the call QA…')
     try {
       const result = await runAutoQa({
-        audioFile: recheck && autoQaTranscript ? undefined : (audioFile || undefined),
+        audioFile: recheck ? undefined : (audioFile || undefined),
         transcript: recheck ? autoQaTranscript : '',
-        documentation,
+        documentation: '',
+        phase: 'call',
         qaType: review.qaType,
         settings,
       })
 
-      const byNumber = new Map(result.criteria.map((item) => [Number(item.number), item]))
       setReview((current) => ({
         ...current,
-        confirmationNumber: current.confirmationNumber.trim() || result.detectedItinerary || current.confirmationNumber,
+        confirmationNumber: current.confirmationNumber.trim() || result.detectedItinerary || '',
+        guestEmail: (current.guestEmail || '').trim() || result.detectedEmail || '',
+        guestPhone: (current.guestPhone || '').trim() || result.detectedPhone || '',
         callLength: current.callLength.trim() || result.detectedCallLength || current.callLength,
         callDate: current.callDate || (result.detectedCallDate && /^\d{4}-\d{2}-\d{2}$/.test(result.detectedCallDate) ? result.detectedCallDate : ''),
-        criteria: current.criteria.map((criterion) => {
-          const ai = byNumber.get(Number(criterion.number))
-          if (!ai || (recheck && manualOverrides.has(Number(criterion.number)))) return criterion
-          let status = ai.status
-          let criticalReason = ai.criticalReason || ''
-          if (status === '✕ Markdown' && current.qaType !== 'Groups' && isMatrixComplianceCriterion(criterion.name)) {
-            status = 'Critical'
-            criticalReason = criticalReason || 'Required Matrix process was not followed'
-          }
-          if (status === 'Critical' && !isCriticalCriterion(criterion.name)) status = '✕ Markdown'
-          return {
-            ...criterion,
-            status,
-            customNote: ai.note || '',
-            criticalReason: status === 'Critical' ? (criticalReason || (criterion.name.toLowerCase().includes('documentation quality') ? 'Other Documentation Critical' : 'Other Matrix Critical')) : '',
-            partialPoints: criterion.points / 2,
-            autoPoints: pointsForStatus(criterion.points, status),
-          }
-        }),
+        criteria: applyAiCriteria(current, result.criteria, 'call', recheck),
       }))
+
       if (!recheck) setManualOverrides(new Set())
       setAutoQaTranscript(result.transcript || autoQaTranscript)
-      setAutoQaEvidence(Object.fromEntries(result.criteria.map((item) => [Number(item.number), item])) as Record<number, AutoQaCriterionResult>)
+      setAutoQaEvidence((current) => ({
+        ...current,
+        ...Object.fromEntries(result.criteria.filter((item) => {
+          const criterion = review.criteria.find((candidate) => Number(candidate.number) === Number(item.number))
+          return criterion ? !isDocumentationCriterion(criterion.name) : true
+        }).map((item) => [Number(item.number), item])),
+      }))
       setValidation({ errors: [], fieldErrors: {} })
       setAutoQaServiceOnline(true)
-      setAutoQaMessage(`QA review complete. Overall confidence ${Math.round(result.overallConfidence || 0)}%. Review the answers and edit any note you want before saving.`)
+      setAutoQaStage('booking-question')
+      setAudioFile(null)
+      setAutoQaMessage(`Call QA complete. Overall confidence ${Math.round(result.overallConfidence || 0)}%. Review or edit anything you want. The uploaded call audio was removed from the server after transcription.`)
     } catch (error) {
       setAutoQaServiceOnline(false)
       setAutoQaMessage(error instanceof Error ? error.message : 'Auto QA failed.')
     } finally {
       setAutoQaBusy(false)
     }
+  }
+
+  const executeDocumentationQa = async () => {
+    if (!autoQaTranscript) {
+      setAutoQaMessage('Run the call QA first.')
+      return
+    }
+    if (!documentation.trim()) {
+      setAutoQaMessage('Paste the booking documentation first.')
+      return
+    }
+
+    setAutoQaBusy(true)
+    setAutoQaMessage('Reviewing the booking documentation and finishing the documentation QA…')
+    try {
+      const result = await runAutoQa({
+        transcript: autoQaTranscript,
+        documentation,
+        phase: 'documentation',
+        qaType: review.qaType,
+        settings,
+      })
+
+      setReview((current) => ({
+        ...current,
+        confirmationNumber: current.confirmationNumber.trim() || result.detectedItinerary || '',
+        guestEmail: (current.guestEmail || '').trim() || result.detectedEmail || '',
+        guestPhone: (current.guestPhone || '').trim() || result.detectedPhone || '',
+        criteria: applyAiCriteria(current, result.criteria, 'documentation', false),
+      }))
+
+      const documentationNumbers = new Set(review.criteria.filter((criterion) => isDocumentationCriterion(criterion.name)).map((criterion) => Number(criterion.number)))
+      setAutoQaEvidence((current) => ({
+        ...current,
+        ...Object.fromEntries(result.criteria.filter((item) => documentationNumbers.has(Number(item.number))).map((item) => [Number(item.number), item])),
+      }))
+      setValidation({ errors: [], fieldErrors: {} })
+      setAutoQaServiceOnline(true)
+      setAutoQaStage('complete')
+      setAutoQaMessage('Documentation QA complete. Review and edit every field, score, status, and note before saving.')
+    } catch (error) {
+      setAutoQaServiceOnline(false)
+      setAutoQaMessage(error instanceof Error ? error.message : 'Documentation QA failed.')
+    } finally {
+      setAutoQaBusy(false)
+    }
+  }
+
+  const skipDocumentationForNonHp = () => {
+    setReview((current) => ({
+      ...current,
+      criteria: current.criteria.map((criterion) => isDocumentationCriterion(criterion.name)
+        ? {
+            ...criterion,
+            status: 'N/A',
+            customNote: 'Documentation QA skipped because this is not an HP booking.',
+            criticalReason: '',
+            autoPoints: pointsForStatus(criterion.points, 'N/A'),
+          }
+        : criterion),
+    }))
+    setAutoQaStage('skipped-docs')
+    setAutoQaMessage('Non-HP booking selected. Documentation QA was skipped. Review and edit everything before saving.')
   }
 
   const score = useMemo(
@@ -269,6 +369,9 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
     setValidation({ errors: [], fieldErrors: {} })
     setAutoQaEvidence({})
     setManualOverrides(new Set())
+    setAutoQaTranscript('')
+    setDocumentation('')
+    setAutoQaStage('ready')
   }
 
   const updateCriterion = (index: number, patch: Partial<CriterionAnswer>) => {
@@ -281,9 +384,6 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
 
         const updated = { ...criterion, ...patch }
 
-        // Custom notes stay available for Followed so evaluators can leave
-        // optional positive/context notes. Markdown and Partial remain required
-        // by validation. Only clear an old note when the status is reset to blank.
         if (patch.status !== undefined && patch.status === '') {
           updated.customNote = ''
           updated.criticalReason = ''
@@ -302,8 +402,6 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
       const next = { ...current.fieldErrors }
       delete next[`criterion-${index}`]
 
-      // Clear any note error as soon as the status no longer requires a note,
-      // or as soon as the evaluator starts typing a note.
       if (
         patch.customNote !== undefined ||
         (patch.status !== undefined &&
@@ -348,6 +446,13 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
     setValidation({ errors: [], fieldErrors: {} })
     setShowChecklist(false)
     setDraftRestored(false)
+    setAudioFile(null)
+    setDocumentation('')
+    setAutoQaMessage('')
+    setAutoQaTranscript('')
+    setAutoQaEvidence({})
+    setManualOverrides(new Set())
+    setAutoQaStage('ready')
     window.localStorage.removeItem(draftKey)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -509,11 +614,31 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
               <input
                 value={review.confirmationNumber}
                 onChange={(event) => updateField('confirmationNumber', event.target.value)}
-                placeholder=""
+                placeholder="AI will fill this if found in the call"
                 disabled={!user.permissions.canEditAgentDetails}
               />
-              
               {validation.fieldErrors.confirmationNumber && <small>{validation.fieldErrors.confirmationNumber}</small>}
+            </label>
+
+            <label className="field">
+              <span>Guest Email</span>
+              <input
+                type="email"
+                value={review.guestEmail || ''}
+                onChange={(event) => updateField('guestEmail', event.target.value)}
+                placeholder="AI will fill this if found in the call"
+                disabled={!user.permissions.canEditAgentDetails}
+              />
+            </label>
+
+            <label className="field">
+              <span>Guest Phone</span>
+              <input
+                value={review.guestPhone || ''}
+                onChange={(event) => updateField('guestPhone', event.target.value)}
+                placeholder="AI will fill this if found in the call"
+                disabled={!user.permissions.canEditAgentDetails}
+              />
             </label>
 
             <label className={validation.fieldErrors.callLength ? 'field invalid' : 'field'}>
@@ -544,50 +669,122 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
               <div className="autoqa-review-heading">
                 <div>
                   <p className="eyebrow">Auto QA</p>
-                  <h3>Call + Documentation Review</h3>
-                  <p className="muted">Upload the call, paste the booking documentation, then review every prefilled QA answer before saving.</p>
+                  <h3>Call First → Booking → Documentation</h3>
+                  <p className="muted">Upload only the call first. No itinerary or documentation is required to start. The call is transcribed and graded, then the tool tries to find the itinerary, guest email, and guest phone for you.</p>
                 </div>
                 <span className={`service-status ${autoQaServiceOnline === true ? 'online' : autoQaServiceOnline === false ? 'offline' : ''}`}>
                   {autoQaServiceOnline === true ? 'Local service online' : autoQaServiceOnline === false ? 'Local service offline' : 'Checking local service…'}
                 </span>
               </div>
 
-              <div className="autoqa-input-grid">
-                <label className="field">
-                  <span>Call Audio</span>
-                  <input
-                    type="file"
-                    accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.flac,.wma,.mp4,.webm"
-                    onChange={(event) => {
-                      setAudioFile(event.target.files?.[0] || null)
-                      setAutoQaTranscript('')
-                      setAutoQaEvidence({})
-                    }}
-                    disabled={autoQaBusy}
-                  />
-                  <em>{audioFile ? audioFile.name : 'WAV, MP3, M4A, AAC, OGG, FLAC, WMA, MP4 and other FFmpeg-supported formats.'}</em>
-                </label>
-
-                <label className="field autoqa-documentation-field">
-                  <span>Documentation / Itinerary Notes</span>
-                  <textarea
-                    value={documentation}
-                    onChange={(event) => setDocumentation(event.target.value)}
-                    placeholder="Copy and paste the full Refunds / Notes / Zendesk / itinerary documentation here…"
-                    disabled={autoQaBusy}
-                  />
-                </label>
-              </div>
+              {autoQaStage === 'ready' && (
+                <div className="autoqa-input-grid">
+                  <label className="field">
+                    <span>Call Audio</span>
+                    <input
+                      type="file"
+                      accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.flac,.wma,.mp4,.webm"
+                      onChange={(event) => {
+                        setAudioFile(event.target.files?.[0] || null)
+                        setAutoQaTranscript('')
+                        setAutoQaEvidence({})
+                        setDocumentation('')
+                      }}
+                      disabled={autoQaBusy}
+                    />
+                    <em>{audioFile ? audioFile.name : 'Upload the call only. WAV, MP3, M4A, AAC, OGG, FLAC, WMA, MP4 and other FFmpeg-supported formats.'}</em>
+                  </label>
+                </div>
+              )}
 
               <div className="autoqa-actions">
-                <button type="button" className="primary-button" onClick={() => void executeAutoQa(false)} disabled={!audioFile || autoQaBusy}>
-                  {autoQaBusy ? 'Reviewing…' : 'Run Auto QA'}
-                </button>
-                <button type="button" className="secondary-button" onClick={() => void executeAutoQa(true)} disabled={!autoQaTranscript || autoQaBusy}>
-                  Recheck QA with Ollama
-                </button>
+                {autoQaStage === 'ready' && (
+                  <button type="button" className="primary-button" onClick={() => void executeCallAutoQa(false)} disabled={!audioFile || autoQaBusy}>
+                    {autoQaBusy ? 'Reviewing Call…' : 'Run Call Auto QA'}
+                  </button>
+                )}
+                {autoQaTranscript && (
+                  <button type="button" className="secondary-button" onClick={() => void executeCallAutoQa(true)} disabled={autoQaBusy}>
+                    Recheck Call QA
+                  </button>
+                )}
                 {autoQaTranscript && <span className="muted">Transcript ready · {autoQaTranscript.split(/\s+/).filter(Boolean).length} words{manualOverrides.size ? ` · ${manualOverrides.size} manual edit${manualOverrides.size === 1 ? '' : 's'} protected` : ''}</span>}
               </div>
+
+              {autoQaStage === 'booking-question' && (
+                <div className="validation-banner">
+                  <div>
+                    <strong>Call QA is complete.</strong>
+                    <span>Is the booking an HP booking?</span>
+                  </div>
+                  <div className="autoqa-actions">
+                    <button type="button" className="primary-button" onClick={() => setAutoQaStage('notes-choice')}>Yes — HP Booking</button>
+                    <button type="button" className="secondary-button" onClick={skipDocumentationForNonHp}>No — Not HP</button>
+                  </div>
+                </div>
+              )}
+
+              {autoQaStage === 'notes-choice' && (
+                <div className="validation-banner">
+                  <div>
+                    <strong>Did you find the booking documentation / notes?</strong>
+                    <span>If you found them, paste them and the tool will finish the documentation QA. If not, you can QA documentation manually.</span>
+                  </div>
+                  <div className="autoqa-actions">
+                    <button type="button" className="primary-button" onClick={() => setAutoQaStage('paste-docs')}>Paste Documentation</button>
+                    <button type="button" className="secondary-button" onClick={() => {
+                      setAutoQaStage('manual-docs')
+                      setAutoQaMessage('Call QA is complete. Documentation remains Manual Review Required for you to score before saving.')
+                    }}>I Will QA Documentation Manually</button>
+                    <button type="button" className="secondary-button" onClick={() => {
+                      setAutoQaStage('manual-docs')
+                      setAutoQaMessage('QA completed from the call evidence we have. Documentation remains Manual Review Required because notes were not supplied.')
+                    }}>QA What We Have Without Notes</button>
+                  </div>
+                </div>
+              )}
+
+              {autoQaStage === 'paste-docs' && (
+                <div className="autoqa-input-grid">
+                  <label className="field autoqa-documentation-field">
+                    <span>Documentation / Itinerary Notes</span>
+                    <textarea
+                      value={documentation}
+                      onChange={(event) => setDocumentation(event.target.value)}
+                      placeholder="Paste the full Refunds / Notes / Zendesk / itinerary documentation here…"
+                      disabled={autoQaBusy}
+                    />
+                  </label>
+                  <div className="autoqa-actions">
+                    <button type="button" className="primary-button" onClick={() => void executeDocumentationQa()} disabled={!documentation.trim() || autoQaBusy}>
+                      {autoQaBusy ? 'Reviewing Documentation…' : 'Finish Documentation QA'}
+                    </button>
+                    <button type="button" className="secondary-button" onClick={() => setAutoQaStage('notes-choice')} disabled={autoQaBusy}>Back</button>
+                  </div>
+                </div>
+              )}
+
+              {autoQaStage === 'manual-docs' && (
+                <div className="validation-banner">
+                  <strong>Documentation: Manual Review Required</strong>
+                  <span>Complete the documentation-related criterion manually in the QA table below. Everything remains editable before submission.</span>
+                </div>
+              )}
+
+              {autoQaStage === 'skipped-docs' && (
+                <div className="validation-banner">
+                  <strong>Documentation QA skipped</strong>
+                  <span>This was marked as not an HP booking. Call QA results remain editable before submission.</span>
+                </div>
+              )}
+
+              {autoQaStage === 'complete' && (
+                <div className="validation-banner">
+                  <strong>Call + Documentation QA complete</strong>
+                  <span>Review every field and every QA answer. You can edit anything before saving.</span>
+                </div>
+              )}
+
               {autoQaMessage && <div className="validation-banner"><span>{autoQaMessage}</span></div>}
             </section>
           )}
@@ -691,7 +888,7 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
                         )}
                       </>
                     ) : (
-                      <span className="note-not-required">Select a status first.</span>
+                      <span className="note-not-required">{isDocumentationCriterion(criterion.name) && autoQaTranscript ? 'Manual Review Required until documentation is completed.' : 'Select a status first.'}</span>
                     )}
                   </td>
                 </tr>
