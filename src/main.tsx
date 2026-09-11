@@ -39,9 +39,25 @@ function setReactInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event('change', { bubbles: true }))
 }
 
+function proxyFor(input: HTMLInputElement): HTMLInputElement | null {
+  const previous = input.previousElementSibling
+  return previous instanceof HTMLInputElement && previous.dataset.dateTextProxy === 'true' ? previous : null
+}
+
 function makeDatePasteable(input: HTMLInputElement) {
-  if (input.dataset.pasteableDateReady === 'true' || input.readOnly || input.disabled) return
-  input.dataset.pasteableDateReady = 'true'
+  if (input.readOnly || input.disabled) return
+
+  const existingProxy = proxyFor(input)
+  if (existingProxy) {
+    input.dataset.pasteableDateReady = 'true'
+    input.style.display = 'none'
+    if (document.activeElement !== existingProxy) existingProxy.value = displayDate(input.value)
+    return
+  }
+
+  // React may replace or move a date field during Auto QA updates. If the
+  // original marker survived but the text proxy did not, rebuild it.
+  delete input.dataset.pasteableDateReady
 
   const textInput = document.createElement('input')
   textInput.type = 'text'
@@ -53,6 +69,7 @@ function makeDatePasteable(input: HTMLInputElement) {
   textInput.setAttribute('aria-label', input.getAttribute('aria-label') || 'Date')
   textInput.dataset.dateTextProxy = 'true'
 
+  input.dataset.pasteableDateReady = 'true'
   input.style.display = 'none'
   input.insertAdjacentElement('beforebegin', textInput)
 
@@ -81,17 +98,11 @@ function makeDatePasteable(input: HTMLInputElement) {
 
 function syncEditableDateInputs() {
   document.querySelectorAll<HTMLInputElement>('input[type="date"]:not([readonly]):not([disabled])').forEach(makeDatePasteable)
-
-  document.querySelectorAll<HTMLInputElement>('input[data-pasteable-date-ready="true"]').forEach((input) => {
-    const proxy = input.previousElementSibling
-    if (!(proxy instanceof HTMLInputElement) || proxy.dataset.dateTextProxy !== 'true') return
-    if (document.activeElement !== proxy) proxy.value = displayDate(input.value)
-  })
 }
 
 const observer = new MutationObserver(() => syncEditableDateInputs())
 observer.observe(document.documentElement, { childList: true, subtree: true })
-window.setInterval(syncEditableDateInputs, 500)
+window.setInterval(syncEditableDateInputs, 250)
 window.addEventListener('load', syncEditableDateInputs)
 
 createRoot(document.getElementById('root')!).render(
