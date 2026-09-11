@@ -6,9 +6,9 @@
   "scripts": {
     "dev": "vite",
     "dev:vite": "vite",
-    "check": "node --check autoqa/server.mjs && node --check autoqa/gateway.mjs && node --check public/autoqa-fetch-bridge.js && tsc -b --pretty false",
-    "check:autoqa": "node --check autoqa/server.mjs && node --check autoqa/gateway.mjs && node --check public/autoqa-fetch-bridge.js",
-    "build": "node --check autoqa/server.mjs && node --check autoqa/gateway.mjs && node --check public/autoqa-fetch-bridge.js && tsc -b && vite build",
+    "check": "node --check autoqa/server.mjs && node --check autoqa/gateway.mjs && node --check public/autoqa-fetch-bridge.js && node --check public/autoqa-booking-popup.js && tsc -b --pretty false",
+    "check:autoqa": "node --check autoqa/server.mjs && node --check autoqa/gateway.mjs && node --check public/autoqa-fetch-bridge.js && node --check public/autoqa-booking-popup.js",
+    "build": "node --check autoqa/server.mjs && node --check autoqa/gateway.mjs && node --check public/autoqa-fetch-bridge.js && node --check public/autoqa-booking-popup.js && tsc -b && vite build",
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
