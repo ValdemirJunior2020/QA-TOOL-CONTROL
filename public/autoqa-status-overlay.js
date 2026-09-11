@@ -1,6 +1,7 @@
 (() => {
   const ROOT_ID = 'autoqa-status-visual'
   const STYLE_ID = 'autoqa-status-visual-style'
+  let liveJob = null
 
   const images = {
     uploading: '/autoqa-status/uploading-call.png',
@@ -26,8 +27,8 @@
         margin: 8px 0 2px;
         padding: 10px 12px;
         border-radius: 14px;
-        background: rgba(23, 18, 79, 0.035);
-        border: 1px solid rgba(23, 18, 79, 0.08);
+        background: rgba(23,18,79,.035);
+        border: 1px solid rgba(23,18,79,.08);
       }
       .autoqa-status-visual-media {
         position: relative;
@@ -51,7 +52,7 @@
         right: 6px;
         width: 20px;
         height: 20px;
-        border: 3px solid rgba(255,255,255,.78);
+        border: 3px solid rgba(255,255,255,.82);
         border-top-color: #22d3ee;
         border-right-color: #6d5bd0;
         border-radius: 50%;
@@ -61,17 +62,51 @@
       .autoqa-status-visual-copy {
         min-width: 0;
         display: grid;
-        gap: 3px;
+        gap: 4px;
       }
       .autoqa-status-visual-copy strong {
         color: #17124f;
         font-size: 14px;
       }
-      .autoqa-status-visual-copy span {
+      .autoqa-status-visual-copy > span {
         color: #687086;
         font-size: 12px;
         line-height: 1.35;
       }
+      .autoqa-queue-line {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        width: fit-content;
+        max-width: 100%;
+        margin-top: 3px;
+        padding: 5px 9px;
+        border-radius: 999px;
+        background: #fff7d6;
+        border: 1px solid #f2cf48;
+        color: #6e5200;
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .autoqa-queue-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #f4b400;
+        flex: 0 0 8px;
+      }
+      .autoqa-queue-line.processing {
+        background: #eafaf6;
+        border-color: #75d8bd;
+        color: #14644f;
+      }
+      .autoqa-queue-line.processing .autoqa-queue-dot { background: #10b981; }
+      .autoqa-queue-line.reconnecting {
+        background: #fff0ec;
+        border-color: #f0a58f;
+        color: #8c341f;
+      }
+      .autoqa-queue-line.reconnecting .autoqa-queue-dot { background: #f97316; }
       @keyframes autoqaStatusSpin { to { transform: rotate(360deg); } }
       @media (max-width: 640px) {
         .autoqa-status-visual { align-items: flex-start; }
@@ -92,22 +127,43 @@
     return qaType?.querySelector('select')?.value === 'Sales'
   }
 
+  function infoFromLiveJob() {
+    if (!liveJob) return null
+    const status = text(liveJob.status).toLowerCase()
+    const stage = text(liveJob.stage).toLowerCase()
+
+    if (status === 'queued') {
+      return { image: images.uploading, title: 'Waiting in Auto QA Queue', done: false }
+    }
+    if (status === 'uploading') {
+      return { image: images.uploading, title: 'Uploading Call', done: false }
+    }
+    if (status === 'reconnecting') {
+      return { image: images.uploading, title: 'Reconnecting to Auto QA', done: false }
+    }
+    if (status === 'completed') {
+      return { image: images.callComplete, title: 'Call QA Complete', done: true }
+    }
+    if (status === 'failed' || status === 'timeout') return null
+
+    if (stage.includes('transcribing')) return { image: images.transcribing, title: 'Transcribing & Grading Call', done: false }
+    if (stage.includes('local knowledge') || stage.includes('service matrix')) return { image: images.matrix, title: 'Reading Local QA Knowledge', done: false }
+    if (stage.includes('rag verification') || stage.includes('verification')) return { image: images.grading, title: 'Verifying QA Result', done: false }
+    if (status === 'processing') return { image: images.grading, title: text(liveJob.stage) || 'Grading Call QA', done: false }
+    return null
+  }
+
   function stageInfo(stageText, panelText) {
+    const live = infoFromLiveJob()
+    if (live) return live
+
     const stage = text(stageText).toLowerCase()
     const panel = text(panelText).toLowerCase()
 
-    if (panel.includes('call + documentation qa complete')) {
-      return { image: images.allComplete, title: 'Call + Documentation QA Complete', done: true }
-    }
-    if (panel.includes('did you find the booking documentation / notes')) {
-      return { image: images.waitingDocs, title: 'Waiting for Documentation', done: false }
-    }
-    if (panel.includes('is the booking an hp booking')) {
-      return { image: images.booking, title: 'Finding Booking Details', done: false }
-    }
-    if (panel.includes('call qa is complete')) {
-      return { image: images.callComplete, title: 'Call QA Complete', done: true }
-    }
+    if (panel.includes('call + documentation qa complete')) return { image: images.allComplete, title: 'Call + Documentation QA Complete', done: true }
+    if (panel.includes('did you find the booking documentation / notes')) return { image: images.waitingDocs, title: 'Waiting for Documentation', done: false }
+    if (panel.includes('is the booking an hp booking')) return { image: images.booking, title: 'Finding Booking Details', done: false }
+    if (panel.includes('call qa is complete')) return { image: images.callComplete, title: 'Call QA Complete', done: true }
 
     if (stage.includes('upload')) return { image: images.uploading, title: 'Uploading Call', done: false }
     if (stage.includes('transcrib')) return { image: images.transcribing, title: 'Transcribing Call', done: false }
@@ -120,11 +176,33 @@
     if (stage.includes('preparing documentation')) return { image: images.waitingDocs, title: 'Preparing Documentation', done: false }
     if (stage.includes('running qa audit')) return { image: images.grading, title: 'Grading Call QA', done: false }
     if (stage.includes('final verification')) return { image: images.grading, title: 'Final Verification', done: false }
-    if (stage === 'qa complete' || stage.includes('complete')) {
-      return { image: images.callComplete, title: 'Call QA Complete', done: true }
-    }
+    if (stage === 'qa complete' || stage.includes('complete')) return { image: images.callComplete, title: 'Call QA Complete', done: true }
     if (stage.includes('failed')) return null
     return stage ? { image: images.grading, title: text(stageText), done: false } : null
+  }
+
+  function queueInfo() {
+    if (!liveJob) return { text: '', className: '' }
+    const status = text(liveJob.status).toLowerCase()
+    if (status === 'queued') {
+      const position = Number(liveJob.position || 0)
+      return {
+        text: position > 0
+          ? `Queue position ${position} · ${position} QA${position === 1 ? '' : 's'} ahead/in line`
+          : 'Waiting for the Auto QA server',
+        className: '',
+      }
+    }
+    if (status === 'processing') {
+      return { text: 'Your QA is processing now', className: 'processing' }
+    }
+    if (status === 'reconnecting') {
+      return { text: 'Connection interrupted — retrying automatically. Your QA is still being watched.', className: 'reconnecting' }
+    }
+    if (status === 'uploading') {
+      return { text: 'Uploading your call safely', className: 'processing' }
+    }
+    return { text: '', className: '' }
   }
 
   function removeVisual() {
@@ -132,9 +210,7 @@
   }
 
   function findProgressBanner(panel) {
-    return Array.from(panel.querySelectorAll('.validation-banner')).find((banner) =>
-      text(banner.textContent).includes('Current stage:')
-    ) || null
+    return Array.from(panel.querySelectorAll('.validation-banner')).find((banner) => text(banner.textContent).includes('Current stage:')) || null
   }
 
   function currentStageText(progressBanner) {
@@ -155,12 +231,12 @@
     const progressBanner = findProgressBanner(panel)
     const stage = currentStageText(progressBanner)
     const info = stageInfo(stage, panel.textContent)
-
     if (!info) {
       removeVisual()
       return
     }
 
+    const queue = queueInfo()
     let root = document.getElementById(ROOT_ID)
     if (!root) {
       root = document.createElement('div')
@@ -168,7 +244,7 @@
       root.className = 'autoqa-status-visual'
     }
 
-    const signature = `${info.image}|${info.title}|${info.done}`
+    const signature = `${info.image}|${info.title}|${info.done}|${queue.text}|${queue.className}`
     if (root.dataset.signature !== signature) {
       root.dataset.signature = signature
       root.innerHTML = `
@@ -179,17 +255,20 @@
         <div class="autoqa-status-visual-copy">
           <strong>${info.title}</strong>
           <span>${info.done ? 'This stage is complete.' : 'Auto QA is working on this stage now.'}</span>
+          ${queue.text ? `<div class="autoqa-queue-line ${queue.className}"><span class="autoqa-queue-dot"></span><span>${queue.text}</span></div>` : ''}
         </div>
       `
     }
 
     const target = progressBanner || panel.querySelector('.autoqa-actions') || panel.firstElementChild
-    if (target && root.parentElement !== panel) {
-      target.insertAdjacentElement('afterend', root)
-    } else if (target && root.previousElementSibling !== target) {
-      target.insertAdjacentElement('afterend', root)
-    }
+    if (target && root.parentElement !== panel) target.insertAdjacentElement('afterend', root)
+    else if (target && root.previousElementSibling !== target) target.insertAdjacentElement('afterend', root)
   }
+
+  window.addEventListener('autoqa:job-status', (event) => {
+    liveJob = event.detail || null
+    window.requestAnimationFrame(render)
+  })
 
   const observer = new MutationObserver(() => window.requestAnimationFrame(render))
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
