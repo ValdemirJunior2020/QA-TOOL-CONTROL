@@ -15,6 +15,7 @@ DATA_DIR = ROOT / "autoqa-data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 TXT_CACHE = DATA_DIR / "txtai"
 LIGHT_CACHE = DATA_DIR / "lightrag"
+EMAIL_UPDATES_FILE = ROOT / "autoqa" / "knowledge" / "email-process-updates.txt"
 AI_MEMORY_URL = "http://127.0.0.1:49374"
 OLLAMA_URL = "http://127.0.0.1:11434"
 OLLAMA_MODEL = "qwen3:8b"
@@ -37,7 +38,7 @@ def chunks(text: str) -> list[str]:
         buffer = []
 
     for line in lines:
-        if line.startswith("## "):
+        if line.startswith("## ") or line.endswith(" — NON-REFUNDABLE REFUND HANDLING") or line.startswith("0"):
             flush()
             heading = line
             continue
@@ -97,6 +98,23 @@ def txtai_retrieve(matrix_text: str, query: str, limit: int = 12) -> list[str]:
         return found
     except Exception:
         return []
+
+
+def read_email_updates() -> str:
+    try:
+        return EMAIL_UPDATES_FILE.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
+def email_updates_retrieve(query: str, limit: int = 10) -> list[str]:
+    text = read_email_updates()
+    if not text.strip():
+        return []
+    found = txtai_retrieve(text, query, limit)
+    if not found:
+        found = lexical(text, query, limit)
+    return found[:limit]
 
 
 def ai_memory_retrieve(query: str, limit: int = 6) -> list[str]:
@@ -187,6 +205,7 @@ def retrieve(payload: dict) -> dict:
     if not txt:
         txt = lexical(matrix_text, query)
 
+    email_updates = email_updates_retrieve(query)
     memory = ai_memory_retrieve(query)
     deep_text = ""
     if deep and matrix_text.strip():
@@ -197,18 +216,24 @@ def retrieve(payload: dict) -> dict:
 
     sections: list[str] = []
     if txt:
-        sections.append("TXT AI RETRIEVAL:\n" + "\n\n".join(txt[:12]))
+        sections.append("PRIMARY SERVICE MATRIX RETRIEVAL:\n" + "\n\n".join(txt[:12]))
+    if email_updates:
+        sections.append(
+            "SUPPLEMENTAL EMAIL PROCESS UPDATES — USE ONLY WHEN THE ACTIVE SERVICE MATRIX DOES NOT CLEARLY ANSWER THE ISSUE:\n"
+            + "\n\n".join(email_updates[:10])
+        )
     if deep_text:
         sections.append("LIGHTRAG DEEP RETRIEVAL:\n" + deep_text)
     if memory:
-        sections.append("AI MEMORY RECALL:\n" + "\n\n".join(memory[:6]))
+        sections.append("LOCAL QA MEMORY RECALL:\n" + "\n\n".join(memory[:6]))
 
     return {
         "ok": True,
         "txtai": bool(txt),
+        "emailUpdates": bool(email_updates),
         "lightrag": bool(deep_text),
         "aiMemory": bool(memory),
-        "context": "\n\n".join(sections)[:22000],
+        "context": "\n\n".join(sections)[:26000],
     }
 
 
