@@ -15,6 +15,7 @@ Thumbs.db
 .vscode/
 .idea/
 coverage/
+.venv-autoqa/
 
 firebase-admin-key.json
 
