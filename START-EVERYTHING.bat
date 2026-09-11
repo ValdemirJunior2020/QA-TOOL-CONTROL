@@ -93,6 +93,8 @@ call :WAIT_GATEWAY_READY
 if errorlevel 1 (
   echo.
   echo [ERROR] Auto QA async gateway did not become ready.
+  echo ----- Health response -----
+  powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:8788/health' -TimeoutSec 8 ^| ConvertTo-Json -Depth 5 } catch { Write-Host $_.Exception.Message }"
   echo ----- Gateway log -----
   powershell -NoProfile -Command "if(Test-Path $env:GATEWAY_LOG){Get-Content $env:GATEWAY_LOG -Tail 100}else{Write-Host 'No gateway log was created.'}"
   echo ----- Port owners -----
@@ -178,7 +180,7 @@ for /L %%R in (1,1,5) do (
 exit /b 1
 
 :CHECK_OLLAMA
-powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 3 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
+powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 3 ^| Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
 exit /b %errorlevel%
 
 :WAIT_OLLAMA
@@ -190,7 +192,7 @@ for /L %%N in (1,1,20) do (
 exit /b 1
 
 :CHECK_GATEWAY_READY
-powershell -NoProfile -Command "try { $r=Invoke-RestMethod -Uri 'http://127.0.0.1:8788/health?ollamaUrl=http://127.0.0.1:11434^&ollamaModel=qwen3:8b' -TimeoutSec 5; if($r.ok -and $r.gateway){exit 0}else{exit 1} } catch { exit 1 }" >nul 2>&1
+powershell -NoProfile -Command "try { $r=Invoke-RestMethod -Uri 'http://127.0.0.1:8788/health' -TimeoutSec 5; if($r.ok -and $r.gateway){exit 0}else{exit 1} } catch { exit 1 }" >nul 2>&1
 exit /b %errorlevel%
 
 :WAIT_GATEWAY_READY
@@ -212,7 +214,7 @@ exit /b 1
 
 :WAIT_PUBLIC_HEALTH
 for /L %%N in (1,1,20) do (
-  powershell -NoProfile -Command "try { $r=Invoke-RestMethod -Uri '%PUBLIC_URL%/health?ollamaUrl=http://127.0.0.1:11434^&ollamaModel=qwen3:8b' -TimeoutSec 8; if($r.ok -and $r.gateway){exit 0}else{exit 1} } catch { exit 1 }" >nul 2>&1
+  powershell -NoProfile -Command "try { $r=Invoke-RestMethod -Uri '%PUBLIC_URL%/health' -TimeoutSec 8; if($r.ok -and $r.gateway){exit 0}else{exit 1} } catch { exit 1 }" >nul 2>&1
   if not errorlevel 1 exit /b 0
   timeout /t 2 /nobreak >nul
 )
