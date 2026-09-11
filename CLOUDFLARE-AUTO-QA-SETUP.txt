@@ -1,32 +1,98 @@
 QA CONTROL CENTER - CLOUDFLARE AUTO QA SETUP
 
-Frontend already deployed at:
+Frontend:
 https://qa-tool-control.netlify.app/
 
-HOME PC
-1. Keep Ollama running.
-2. Run START-AUTO-QA.bat. The local service stays at http://127.0.0.1:8788.
-3. Install/run your Cloudflare Tunnel as a Windows service.
-4. In Cloudflare Tunnel, create a Published Application hostname, for example:
+Local Auto QA:
+http://127.0.0.1:8788
+
+Ollama:
+http://127.0.0.1:11434
+Model: qwen3:8b
+
+============================================================
+RECOMMENDED: PERMANENT NAMED CLOUDFLARE TUNNEL
+============================================================
+
+Use a named tunnel so the Auto QA HTTPS hostname does not change when the PC restarts.
+Do this one time on the HOME PC. Keep all Cloudflare credentials outside this repository.
+
+1. Authenticate cloudflared on the home PC if you have not already done so.
+
+2. Create a named tunnel, for example:
+   cloudflared tunnel create hotelplanner-autoqa
+
+3. In your normal local cloudflared folder, create/configure:
+   %USERPROFILE%\.cloudflared\config.yml
+
+   Example only:
+
+   tunnel: YOUR-TUNNEL-UUID
+   credentials-file: C:\Users\YOUR-WINDOWS-USER\.cloudflared\YOUR-TUNNEL-UUID.json
+
+   ingress:
+     - hostname: autoqa.yourdomain.com
+       service: http://127.0.0.1:8788
+     - service: http_status:404
+
+4. Create the DNS route one time:
+   cloudflared tunnel route dns hotelplanner-autoqa autoqa.yourdomain.com
+
+5. Tell START-EVERYTHING.bat to use the named tunnel without storing secrets in GitHub.
+   In Windows User Environment Variables, set:
+
+   AUTO_QA_TUNNEL_NAME=hotelplanner-autoqa
+   AUTO_QA_PUBLIC_URL=https://autoqa.yourdomain.com
+
+   Optional, only if config.yml is somewhere else:
+   AUTO_QA_TUNNEL_CONFIG=C:\path\to\config.yml
+
+6. Double-click START-EVERYTHING.bat.
+   It will:
+   - verify Ollama
+   - verify qwen3:8b
+   - start/watch Auto QA on 8788
+   - wait until Auto QA is truly healthy
+   - start/watch the named Cloudflare tunnel
+   - verify the public URL when AUTO_QA_PUBLIC_URL is set
+   - open the Netlify QA site only after local Auto QA is healthy
+
+7. In QA Control Center > Admin > Auto QA, set Auto QA Service URL once to:
    https://autoqa.yourdomain.com
-   Service/Origin: http://127.0.0.1:8788
 
-NETLIFY FRONTEND
-1. Open QA Control Center > Admin > Auto QA.
-2. In "Auto QA Service URL", paste ONLY the Cloudflare HTTPS hostname, for example:
-   https://autoqa.yourdomain.com
-3. Keep Ollama URL as http://127.0.0.1:11434 because Ollama is called by the HOME Auto QA service, not by the work browser.
-4. Click Save Auto QA Settings.
-5. Open Review. The service indicator should show online.
+   Keep Ollama URL as:
+   http://127.0.0.1:11434
 
-CORS
-The Auto QA server allows the production frontend:
-https://qa-tool-control.netlify.app
-and local Vite development at localhost/127.0.0.1:5173.
+============================================================
+QUICK TUNNEL FALLBACK
+============================================================
 
+If AUTO_QA_TUNNEL_NAME is not set, START-EVERYTHING.bat uses a Quick Tunnel.
+The BAT waits for the trycloudflare.com URL, displays it, copies it to your clipboard,
+and verifies its /health endpoint before reporting the tunnel as healthy.
+
+Quick Tunnel URLs can change after a restart. If the URL changes, paste the new HTTPS
+URL into Admin > Auto QA > Auto QA Service URL and save it.
+
+============================================================
 SECURITY
-Do NOT place a Cloudflare tunnel token in this project or in frontend code.
-If a tunnel token has been shared anywhere, rotate it in Cloudflare and install the replacement token only on the home PC.
-For production, protect the published hostname with Cloudflare Access or another authentication layer.
+============================================================
+
+DO NOT commit any of these to GitHub:
+- tunnel credential JSON files
+- tunnel tokens
+- cert.pem
+- passwords
+- Firebase admin/service-account secrets
+- any .env file
+
+Keep tunnel credentials in %USERPROFILE%\.cloudflared or another local folder outside
+the repository. The project .gitignore ignores .env files and .venv-autoqa.
+
+The Auto QA backend only allows its Ollama target to be localhost/127.0.0.1 and does not
+permanently save uploaded call recordings. Temporary audio is removed even when a run fails.
+
+For production, protect the public Auto QA hostname with Cloudflare Access or another
+appropriate access-control layer before exposing it broadly.
 
 Nothing in this setup requires changing an existing .env file.
