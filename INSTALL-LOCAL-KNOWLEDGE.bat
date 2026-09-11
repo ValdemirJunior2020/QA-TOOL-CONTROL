@@ -5,7 +5,7 @@ cd /d "%~dp0"
 echo ============================================================
 echo QA CONTROL CENTER - LOCAL KNOWLEDGE INSTALLER
 echo txtai + LightRAG + ai-memory
-necho ============================================================
+echo ============================================================
 echo.
 
 if not exist ".venv-autoqa\Scripts\python.exe" (
