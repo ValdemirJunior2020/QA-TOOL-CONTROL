@@ -27,6 +27,63 @@
     })
   }
 
+  function sanitizeReviewerText(value) {
+    let text = String(value || '')
+    if (!text) return text
+
+    text = text
+      .replace(/according to (?:the )?transcript/gi, 'based on the call')
+      .replace(/(?:the )?transcript (?:shows|showed|indicates|indicated|states|stated|confirms|confirmed|reflects|reflected)/gi, (match) => {
+        const lower = match.toLowerCase()
+        if (lower.includes('indicat')) return 'the call indicates'
+        if (lower.includes('state')) return 'the call shows'
+        if (lower.includes('confirm')) return 'the call confirms'
+        if (lower.includes('reflect')) return 'the call reflects'
+        return 'the call shows'
+      })
+      .replace(/in (?:the )?transcript/gi, 'in the call')
+      .replace(/from (?:the )?transcript/gi, 'from the call')
+      .replace(/\btranscription\b/gi, 'call review')
+      .replace(/\btranscript\b/gi, 'call')
+      .replace(/\bChatGPT\b/gi, 'review')
+      .replace(/\bOllama\b/gi, 'review')
+      .replace(/\bLLM\b/gi, 'review')
+      .replace(/\blanguage model\b/gi, 'review')
+      .replace(/\bmachine learning\b/gi, 'review')
+      .replace(/\bRAG\b/gi, 'reference review')
+      .replace(/\bretrieval system\b/gi, 'reference review')
+      .replace(/\bautomated analysis\b/gi, 'review')
+      .replace(/\bAI\b/gi, 'review')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+
+    return text
+  }
+
+  function sanitizeQaData(data) {
+    if (!data || typeof data !== 'object') return data
+
+    const clean = { ...data }
+    clean.summary = sanitizeReviewerText(clean.summary)
+
+    if (Array.isArray(clean.criteria)) {
+      clean.criteria = clean.criteria.map((item) => {
+        if (!item || typeof item !== 'object') return item
+        return {
+          ...item,
+          note: sanitizeReviewerText(item.note),
+          criticalReason: sanitizeReviewerText(item.criticalReason),
+          matrixEvidence: sanitizeReviewerText(item.matrixEvidence),
+          documentationEvidence: sanitizeReviewerText(item.documentationEvidence),
+          transcriptEvidence: sanitizeReviewerText(item.transcriptEvidence),
+        }
+      })
+    }
+
+    // Keep clean.transcript untouched so View/Download Transcript still contains the exact call text.
+    return clean
+  }
+
   function isAutoQaPost(input, init) {
     if (requestMethod(input, init) !== 'POST') return false
     try {
@@ -110,7 +167,13 @@
   }
 
   async function waitForJob(initial, originalUrl) {
-    if (initial.status !== 202) return initial
+    if (initial.status !== 202) {
+      const directPayload = await initial.clone().json().catch(() => null)
+      if (directPayload?.success === true && directPayload?.data) {
+        return jsonResponse(initial.status, { ...directPayload, data: sanitizeQaData(directPayload.data) })
+      }
+      return initial
+    }
 
     const accepted = await initial.clone().json().catch(() => ({}))
     if (accepted?.success !== true || accepted?.accepted !== true || !accepted?.runId) return initial
@@ -140,7 +203,7 @@
         consecutiveNetworkFailures = 0
         const job = payload.job
         if (job.status === 'completed') {
-          return jsonResponse(200, { success: true, data: job.data })
+          return jsonResponse(200, { success: true, data: sanitizeQaData(job.data) })
         }
         if (job.status === 'failed') {
           return jsonResponse(500, { success: false, message: job.message || 'Auto QA failed.' })
