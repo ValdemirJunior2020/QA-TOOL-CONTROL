@@ -54,11 +54,12 @@ set "AUTO_QA_PYTHON=%CD%\.venv-autoqa\Scripts\python.exe"
 set "AUTO_QA_OLLAMA_URL=http://127.0.0.1:11434"
 set "AUTO_QA_OLLAMA_MODEL=qwen3:8b"
 
-echo [START] Auto QA on http://127.0.0.1:8788
+echo [START] Auto QA gateway on http://127.0.0.1:8788
+echo [INFO] txtai = fast local RAG, LightRAG = low-confidence deep check, ai-memory = optional local recall.
 echo Press Ctrl+C to stop it.
 echo.
-node autoqa\server.mjs
+node autoqa\gateway.mjs
 
 echo.
-echo [STOPPED] Auto QA server exited.
+echo [STOPPED] Auto QA gateway exited.
 pause
