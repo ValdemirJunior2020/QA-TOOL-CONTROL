@@ -8,6 +8,7 @@ if /I "%~1"=="TUNNEL-WATCH" goto TUNNEL_WATCH
 echo ============================================================
 echo QA CONTROL CENTER - START EVERYTHING
 echo ============================================================
+echo Repo: %CD%
 echo.
 
 if not exist ".venv-autoqa\Scripts\python.exe" (
@@ -33,7 +34,6 @@ set "CF="
 for /f "delims=" %%I in ('where cloudflared 2^>nul') do if not defined CF set "CF=%%I"
 if not defined CF if exist "C:\Program Files (x86)\cloudflared\cloudflared.exe" set "CF=C:\Program Files (x86)\cloudflared\cloudflared.exe"
 if not defined CF if exist "C:\Program Files\cloudflared\cloudflared.exe" set "CF=C:\Program Files\cloudflared\cloudflared.exe"
-
 if not defined CF (
   echo [ERROR] cloudflared was not found.
   echo Install Cloudflare Tunnel first.
@@ -42,42 +42,157 @@ if not defined CF (
 )
 
 set "AUTO_QA_PYTHON=%CD%\.venv-autoqa\Scripts\python.exe"
+set "AUTO_QA_OLLAMA_URL=http://127.0.0.1:11434"
+set "AUTO_QA_OLLAMA_MODEL=qwen3:8b"
+set "CF_LOG=%TEMP%\qa-control-cloudflare.log"
 
-powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 ^| Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
+echo [CHECK] Ollama...
+powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 3 ^| Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
 if errorlevel 1 (
   echo [START] Ollama...
   start "Ollama" /min cmd /c "ollama serve"
+  set /a OLLAMA_TRIES=0
+  :WAIT_OLLAMA
+  set /a OLLAMA_TRIES+=1
+  powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 3 ^| Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
+  if not errorlevel 1 goto OLLAMA_READY
+  if !OLLAMA_TRIES! GEQ 20 (
+    echo [ERROR] Ollama did not become ready after 60 seconds.
+    pause
+    exit /b 1
+  )
   timeout /t 3 /nobreak >nul
+  goto WAIT_OLLAMA
 ) else (
   echo [OK] Ollama is already running.
 )
 
-echo [START] Auto QA watchdog...
-start "AUTO QA WATCHDOG" /min cmd /c call "%~f0" AUTOQA-WATCH
+:OLLAMA_READY
+ollama list | findstr /i /c:"qwen3:8b" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Ollama model qwen3:8b is not installed.
+  echo Run INSTALL-AUTO-QA.bat or: ollama pull qwen3:8b
+  pause
+  exit /b 1
+)
+echo [OK] qwen3:8b is installed.
 
+echo [CHECK] Auto QA service on port 8788...
+powershell -NoProfile -Command "try { $r=Invoke-RestMethod -Uri 'http://127.0.0.1:8788/health?ollamaUrl=http%%3A%%2F%%2F127.0.0.1%%3A11434^&ollamaModel=qwen3%%3A8b' -TimeoutSec 4; if($r.ok){exit 0}else{exit 1} } catch { exit 1 }" >nul 2>&1
+if errorlevel 1 (
+  echo [START] Auto QA watchdog...
+  start "AUTO QA WATCHDOG" /min cmd /c call "%~f0" AUTOQA-WATCH
+) else (
+  echo [OK] Auto QA service is already healthy.
+)
+
+set /a AUTOQA_TRIES=0
+:WAIT_AUTOQA
+set /a AUTOQA_TRIES+=1
+powershell -NoProfile -Command "try { $r=Invoke-RestMethod -Uri 'http://127.0.0.1:8788/health?ollamaUrl=http%%3A%%2F%%2F127.0.0.1%%3A11434^&ollamaModel=qwen3%%3A8b' -TimeoutSec 4; if($r.ok){exit 0}else{exit 1} } catch { exit 1 }" >nul 2>&1
+if not errorlevel 1 goto AUTOQA_READY
+if !AUTOQA_TRIES! GEQ 30 (
+  echo [ERROR] Auto QA did not become healthy after 60 seconds.
+  echo Check the AUTO QA WATCHDOG window for the exact server error.
+  pause
+  exit /b 1
+)
 timeout /t 2 /nobreak >nul
+goto WAIT_AUTOQA
 
-echo [START] Cloudflare Quick Tunnel watchdog...
-start "CLOUDFLARE AUTO QA TUNNEL" cmd /c call "%~f0" TUNNEL-WATCH "%CF%"
+:AUTOQA_READY
+echo [OK] Auto QA is healthy on http://127.0.0.1:8788
 
-timeout /t 2 /nobreak >nul
+del /q "%CF_LOG%" >nul 2>&1
+set "TUNNEL_MODE=QUICK"
+set "TUNNEL_CONFIG="
+set "TUNNEL_NAME="
+set "PUBLIC_URL="
 
+if defined AUTO_QA_TUNNEL_NAME (
+  set "TUNNEL_MODE=NAMED"
+  set "TUNNEL_NAME=%AUTO_QA_TUNNEL_NAME%"
+  set "TUNNEL_CONFIG=%AUTO_QA_TUNNEL_CONFIG%"
+  if not defined TUNNEL_CONFIG set "TUNNEL_CONFIG=%USERPROFILE%\.cloudflared\config.yml"
+  if not exist "!TUNNEL_CONFIG!" (
+    echo [ERROR] Named tunnel requested but config file was not found:
+    echo !TUNNEL_CONFIG!
+    echo.
+    echo Set AUTO_QA_TUNNEL_CONFIG to your local config.yml path or remove
+    echo AUTO_QA_TUNNEL_NAME to use a Quick Tunnel.
+    pause
+    exit /b 1
+  )
+  echo [START] Named Cloudflare Tunnel: !TUNNEL_NAME!
+  start "CLOUDFLARE AUTO QA TUNNEL" cmd /c call "%~f0" TUNNEL-WATCH "%CF%" NAMED "!TUNNEL_CONFIG!" "!TUNNEL_NAME!" "%CF_LOG%"
+  if defined AUTO_QA_PUBLIC_URL set "PUBLIC_URL=%AUTO_QA_PUBLIC_URL%"
+) else (
+  echo [START] Cloudflare Quick Tunnel...
+  start "CLOUDFLARE AUTO QA TUNNEL" cmd /c call "%~f0" TUNNEL-WATCH "%CF%" QUICK "" "" "%CF_LOG%"
+
+  set /a CF_TRIES=0
+  :WAIT_QUICK_URL
+  set /a CF_TRIES+=1
+  for /f "usebackq delims=" %%U in (`powershell -NoProfile -Command "$p='%CF_LOG%'; if(Test-Path $p){$t=Get-Content $p -Raw -ErrorAction SilentlyContinue; if($t -match 'https://[a-z0-9-]+\.trycloudflare\.com'){ $matches[0] }}"`) do set "PUBLIC_URL=%%U"
+  if defined PUBLIC_URL goto QUICK_URL_READY
+  if !CF_TRIES! GEQ 30 (
+    echo [ERROR] Cloudflare Quick Tunnel did not publish a URL after 60 seconds.
+    echo Check the CLOUDFLARE AUTO QA TUNNEL window and:
+    echo %CF_LOG%
+    pause
+    exit /b 1
+  )
+  timeout /t 2 /nobreak >nul
+  goto WAIT_QUICK_URL
+
+  :QUICK_URL_READY
+  echo [OK] Quick Tunnel URL: !PUBLIC_URL!
+  echo !PUBLIC_URL!| clip
+  echo [INFO] The URL was copied to your clipboard.
+)
+
+if defined PUBLIC_URL (
+  echo [CHECK] Cloudflare public health...
+  set /a PUBLIC_TRIES=0
+  :WAIT_PUBLIC_HEALTH
+  set /a PUBLIC_TRIES+=1
+  powershell -NoProfile -Command "try { $r=Invoke-RestMethod -Uri '!PUBLIC_URL!/health?ollamaUrl=http%%3A%%2F%%2F127.0.0.1%%3A11434^&ollamaModel=qwen3%%3A8b' -TimeoutSec 8; if($r.ok){exit 0}else{exit 1} } catch { exit 1 }" >nul 2>&1
+  if not errorlevel 1 goto PUBLIC_HEALTHY
+  if !PUBLIC_TRIES! GEQ 15 (
+    echo [WARNING] Local Auto QA is healthy, but the public Cloudflare health check failed.
+    echo Check the tunnel window before running Auto QA from Netlify.
+    goto SHOW_READY
+  )
+  timeout /t 2 /nobreak >nul
+  goto WAIT_PUBLIC_HEALTH
+  :PUBLIC_HEALTHY
+  echo [OK] Cloudflare public endpoint is healthy.
+)
+
+:SHOW_READY
 echo.
 echo ============================================================
-echo EVERYTHING STARTED
+echo AUTO QA STARTUP COMPLETE
 echo ============================================================
 echo Auto QA : http://127.0.0.1:8788
 echo Ollama  : http://127.0.0.1:11434
+echo Model   : qwen3:8b
 echo Frontend: https://qa-tool-control.netlify.app/
+echo Tunnel  : !TUNNEL_MODE!
+if defined PUBLIC_URL echo Public   : !PUBLIC_URL!
 echo.
-echo IMPORTANT:
-echo - Keep the Cloudflare window running.
-echo - The Auto QA server watchdog will restart the server if it crashes.
-echo - The Cloudflare watchdog will restart the tunnel if it crashes.
-echo - A restarted Quick Tunnel can receive a NEW trycloudflare.com URL.
-echo   If that happens, update Admin ^> Auto QA Service URL with the new URL.
+if /I "!TUNNEL_MODE!"=="QUICK" (
+  echo IMPORTANT: Quick Tunnel URLs can change after a restart.
+  echo If this URL is different, paste the copied URL into:
+  echo Admin ^> Auto QA ^> Auto QA Service URL
+  echo and save it before running Auto QA.
+) else (
+  echo Named Tunnel is enabled. Its hostname should remain permanent.
+  echo Keep credentials/config only in %%USERPROFILE%%\.cloudflared or another local path.
+  echo Never commit tunnel credentials or tokens to GitHub.
+)
 echo.
-echo Opening the QA tool...
+echo Opening the QA website now that the local Auto QA service is healthy...
 start "" "https://qa-tool-control.netlify.app/"
 echo.
 pause
@@ -86,7 +201,14 @@ exit /b 0
 :AUTOQA_WATCH
 cd /d "%~dp0"
 set "AUTO_QA_PYTHON=%CD%\.venv-autoqa\Scripts\python.exe"
+set "AUTO_QA_OLLAMA_URL=http://127.0.0.1:11434"
+set "AUTO_QA_OLLAMA_MODEL=qwen3:8b"
 :SERVER_LOOP
+powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:8788/health?ollamaUrl=http%%3A%%2F%%2F127.0.0.1%%3A11434^&ollamaModel=qwen3%%3A8b' -TimeoutSec 3 ^| Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
+if not errorlevel 1 (
+  timeout /t 5 /nobreak >nul
+  goto SERVER_LOOP
+)
 powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 ^| Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
 if errorlevel 1 start "Ollama" /min cmd /c "ollama serve"
 echo [%date% %time%] Starting Auto QA server...
@@ -97,19 +219,28 @@ goto SERVER_LOOP
 
 :TUNNEL_WATCH
 cd /d "%~dp0"
-set "CF=%~2"
-if not defined CF (
-  echo cloudflared path was not supplied.
+set "CF_EXE=%~2"
+set "CF_MODE=%~3"
+set "CF_CONFIG=%~4"
+set "CF_NAME=%~5"
+set "CF_LOG=%~6"
+if not defined CF_EXE (
+  echo [ERROR] cloudflared path was not supplied.
   timeout /t 10
   exit /b 1
 )
+if not defined CF_LOG set "CF_LOG=%TEMP%\qa-control-cloudflare.log"
 :TUNNEL_LOOP
 echo.
 echo ============================================================
-echo CLOUDFLARE QUICK TUNNEL
-echo Copy the https://xxxxx.trycloudflare.com URL if it changes.
+echo CLOUDFLARE !CF_MODE! TUNNEL
+echo Log: !CF_LOG!
 echo ============================================================
-"%CF%" tunnel --url http://127.0.0.1:8788
+if /I "!CF_MODE!"=="NAMED" (
+  powershell -NoProfile -Command "^& $env:CF_EXE tunnel --config $env:CF_CONFIG run $env:CF_NAME 2^>^&1 ^| Tee-Object -FilePath $env:CF_LOG -Append"
+) else (
+  powershell -NoProfile -Command "^& $env:CF_EXE tunnel --url http://127.0.0.1:8788 2^>^&1 ^| Tee-Object -FilePath $env:CF_LOG -Append"
+)
 echo.
 echo [%date% %time%] Tunnel stopped. Restarting in 5 seconds...
 timeout /t 5 /nobreak >nul
