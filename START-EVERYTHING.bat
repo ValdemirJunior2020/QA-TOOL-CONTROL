@@ -2,6 +2,8 @@
 setlocal
 cd /d "%~dp0"
 
+if exist "%~dp0START-AI-MEMORY.bat" call "%~dp0START-AI-MEMORY.bat"
+
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-everything.ps1"
 set "RC=%ERRORLEVEL%"
 
