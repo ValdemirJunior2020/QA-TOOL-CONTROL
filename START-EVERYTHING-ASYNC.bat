@@ -29,8 +29,8 @@ where ollama >nul 2>&1 || (
   exit /b 1
 )
 
-echo [CHECK] Stopping old direct Auto QA server on port 8788 if present...
-powershell -NoProfile -Command "$p=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'autoqa[\\/]server\.mjs' }; foreach($x in $p){ try { Stop-Process -Id $x.ProcessId -Force -ErrorAction Stop; Write-Host ('[STOPPED] Old Auto QA PID ' + $x.ProcessId) } catch {} }"
+echo [CHECK] Stopping old Auto QA Node processes so we start clean...
+powershell -NoProfile -Command "$p=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'node.exe' -and ($_.CommandLine -match 'autoqa[\\/]server\.mjs' -or $_.CommandLine -match 'autoqa[\\/]gateway\.mjs') }; foreach($x in $p){ try { Stop-Process -Id $x.ProcessId -Force -ErrorAction Stop; Write-Host ('[STOPPED] Auto QA PID ' + $x.ProcessId) } catch {} }"
 timeout /t 1 /nobreak >nul
 
 powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 3 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
