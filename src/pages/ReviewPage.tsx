@@ -28,6 +28,34 @@ interface ValidationState {
 }
 
 type AutoQaStage = 'ready' | 'booking-question' | 'notes-choice' | 'paste-docs' | 'manual-docs' | 'skipped-docs' | 'complete'
+type AutoQaProgressStatus = 'idle' | 'running' | 'failed' | 'complete'
+type AutoQaProgressMode = 'call' | 'documentation'
+type AutoQaDetailField = 'confirmationNumber' | 'guestEmail' | 'guestPhone' | 'callLength' | 'callDate'
+
+interface AutoQaProgressState {
+  status: AutoQaProgressStatus
+  mode: AutoQaProgressMode
+  percent: number
+  elapsedSeconds: number
+  stage: string
+  startedAt: number | null
+  error: string
+}
+
+interface StoredReviewDraftV2 {
+  version: 2
+  review: ReviewDraft
+  manualCriterionNumbers: number[]
+  manualDetailFields: AutoQaDetailField[]
+}
+
+const AUTO_QA_DETAIL_FIELDS = new Set<AutoQaDetailField>([
+  'confirmationNumber',
+  'guestEmail',
+  'guestPhone',
+  'callLength',
+  'callDate',
+])
 
 function normalizeCallId(value: string): string {
   const cleaned = value.replace(/\s+/g, '')
@@ -63,6 +91,29 @@ function criticalReasonsFor(name: string): string[] {
     'Required Matrix tool/process was used incorrectly',
     'Other Matrix Critical',
   ]
+}
+
+function formatElapsed(seconds: number): string {
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.max(0, seconds % 60)
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+}
+
+function estimateProgress(mode: AutoQaProgressMode, elapsedSeconds: number): { percent: number; stage: string } {
+  if (mode === 'documentation') {
+    if (elapsedSeconds < 3) return { percent: Math.min(10, 3 + elapsedSeconds * 2), stage: 'Preparing documentation' }
+    if (elapsedSeconds < 12) return { percent: Math.min(45, 12 + (elapsedSeconds - 3) * 3.5), stage: 'Reading QA criteria' }
+    if (elapsedSeconds < 22) return { percent: Math.min(60, 45 + (elapsedSeconds - 12) * 1.5), stage: 'Reading Service Matrix' }
+    if (elapsedSeconds < 70) return { percent: Math.min(95, 60 + (elapsedSeconds - 22) * 0.72), stage: 'Running QA audit' }
+    return { percent: Math.min(99, 95 + Math.floor((elapsedSeconds - 70) / 15)), stage: 'Final verification' }
+  }
+
+  if (elapsedSeconds < 4) return { percent: Math.min(10, 2 + elapsedSeconds * 2), stage: 'Uploading call' }
+  if (elapsedSeconds < 35) return { percent: Math.min(45, 10 + (elapsedSeconds - 4) * 1.12), stage: 'Transcribing call' }
+  if (elapsedSeconds < 48) return { percent: Math.min(60, 45 + (elapsedSeconds - 35) * 1.15), stage: 'Reading QA criteria' }
+  if (elapsedSeconds < 62) return { percent: Math.min(75, 60 + (elapsedSeconds - 48) * 1.05), stage: 'Reading Service Matrix' }
+  if (elapsedSeconds < 120) return { percent: Math.min(95, 75 + (elapsedSeconds - 62) * 0.34), stage: 'Running QA audit' }
+  return { percent: Math.min(99, 95 + Math.floor((elapsedSeconds - 120) / 20)), stage: 'Final verification' }
 }
 
 function validateReview(review: ReviewDraft, user: QaUser, settings: AppSettings): ValidationState {
@@ -114,7 +165,7 @@ function validateReview(review: ReviewDraft, user: QaUser, settings: AppSettings
 
     if (criterion.status === 'Critical') {
       if (!isCriticalCriterion(criterion.name)) {
-        add(`criterion-${index}`, `Critical can only be selected for Matrix Compliance or Documentation Quality.`)
+        add(`criterion-${index}`, 'Critical can only be selected for Matrix Compliance or Documentation Quality.')
       } else if (!String(criterion.criticalReason || '').trim()) {
         add(`criterion-${index}`, `Select a Critical reason for criterion ${criterion.number}: ${criterion.name}.`)
       }
@@ -137,18 +188,90 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
   const [autoQaTranscript, setAutoQaTranscript] = useState('')
   const [autoQaEvidence, setAutoQaEvidence] = useState<Record<number, AutoQaCriterionResult>>({})
   const [autoQaServiceOnline, setAutoQaServiceOnline] = useState<boolean | null>(null)
+  const [autoQaServiceMessage, setAutoQaServiceMessage] = useState('Checking Auto QA service…')
+  const [autoQaLastChecked, setAutoQaLastChecked] = useState<string>('')
   const [manualOverrides, setManualOverrides] = useState<Set<number>>(() => new Set())
+  const [manualDetailFields, setManualDetailFields] = useState<Set<AutoQaDetailField>>(() => new Set())
   const [autoQaStage, setAutoQaStage] = useState<AutoQaStage>('ready')
+  const [autoQaProgress, setAutoQaProgress] = useState<AutoQaProgressState>({
+    status: 'idle',
+    mode: 'call',
+    percent: 0,
+    elapsedSeconds: 0,
+    stage: 'Not started',
+    startedAt: null,
+    error: '',
+  })
   const draftKey = `qa-review-draft:${user.email}:${initialQaType.toLowerCase()}`
+
+  const refreshAutoQaService = async (showMessage = false): Promise<boolean> => {
+    const result = await checkAutoQaService(settings)
+    setAutoQaServiceOnline(result.ok)
+    setAutoQaServiceMessage(result.message)
+    setAutoQaLastChecked(result.checkedAt)
+    if (showMessage) setAutoQaMessage(result.message)
+    return result.ok
+  }
+
+  const startProgress = (mode: AutoQaProgressMode) => {
+    setAutoQaProgress({
+      status: 'running',
+      mode,
+      percent: 0,
+      elapsedSeconds: 0,
+      stage: mode === 'call' ? 'Uploading call' : 'Preparing documentation',
+      startedAt: Date.now(),
+      error: '',
+    })
+  }
+
+  const completeProgress = () => {
+    setAutoQaProgress((current) => ({
+      ...current,
+      status: 'complete',
+      percent: 100,
+      stage: 'QA complete',
+      elapsedSeconds: current.startedAt ? Math.max(0, Math.floor((Date.now() - current.startedAt) / 1000)) : current.elapsedSeconds,
+      error: '',
+    }))
+  }
+
+  const failProgress = (message: string) => {
+    setAutoQaProgress((current) => ({
+      ...current,
+      status: 'failed',
+      stage: 'FAILED',
+      elapsedSeconds: current.startedAt ? Math.max(0, Math.floor((Date.now() - current.startedAt) / 1000)) : current.elapsedSeconds,
+      error: message,
+    }))
+  }
 
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(draftKey)
       if (saved) {
-        const parsed = JSON.parse(saved) as ReviewDraft
-        if (parsed && parsed.agentName !== undefined && Array.isArray(parsed.criteria)) {
-          setReview(parsed)
+        const parsed = JSON.parse(saved) as StoredReviewDraftV2 | ReviewDraft
+        if ('version' in parsed && parsed.version === 2 && parsed.review && Array.isArray(parsed.review.criteria)) {
+          setReview(parsed.review)
+          setManualOverrides(new Set(parsed.manualCriterionNumbers || []))
+          setManualDetailFields(new Set(parsed.manualDetailFields || []))
           setDraftRestored(true)
+          return
+        }
+
+        const legacy = parsed as ReviewDraft
+        if (legacy && legacy.agentName !== undefined && Array.isArray(legacy.criteria)) {
+          const qaType = legacy.qaType || initialQaType
+          setReview({
+            ...legacy,
+            qaType,
+            criteria: createCriterionAnswers(settings, qaType),
+            criticalErrors: { noNotes: false, voucherReference: false },
+          })
+          setManualOverrides(new Set())
+          setManualDetailFields(new Set())
+          setDraftRestored(true)
+          setAutoQaMessage('Draft details restored. Old scoring was reset for safety so it cannot be mistaken for a new Auto QA result.')
           return
         }
       }
@@ -161,23 +284,80 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
       evaluator: user.role === 'admin' ? current.evaluator || user.displayName : user.displayName,
       todayDate: localDateInput(),
     }))
-  }, [draftKey, user.displayName, user.role])
+  }, [draftKey, initialQaType, settings, user.displayName, user.role])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      window.localStorage.setItem(draftKey, JSON.stringify(review))
+      const baseline = new Map(createCriterionAnswers(settings, review.qaType).map((criterion) => [Number(criterion.number), criterion]))
+      const safeReview: ReviewDraft = {
+        ...review,
+        criteria: review.criteria.map((criterion) => {
+          const number = Number(criterion.number)
+          const wasFilledByAutoQa = Boolean(autoQaEvidence[number])
+          if (wasFilledByAutoQa && !manualOverrides.has(number)) return baseline.get(number) || criterion
+          return criterion
+        }),
+      }
+
+      if (autoQaTranscript) {
+        if (!manualDetailFields.has('confirmationNumber')) safeReview.confirmationNumber = ''
+        if (!manualDetailFields.has('guestEmail')) safeReview.guestEmail = ''
+        if (!manualDetailFields.has('guestPhone')) safeReview.guestPhone = ''
+        if (!manualDetailFields.has('callLength')) safeReview.callLength = ''
+        if (!manualDetailFields.has('callDate')) safeReview.callDate = ''
+      }
+
+      const stored: StoredReviewDraftV2 = {
+        version: 2,
+        review: safeReview,
+        manualCriterionNumbers: [...manualOverrides],
+        manualDetailFields: [...manualDetailFields],
+      }
+      window.localStorage.setItem(draftKey, JSON.stringify(stored))
     }, 500)
     return () => window.clearTimeout(timer)
-  }, [draftKey, review])
+  }, [autoQaEvidence, autoQaTranscript, draftKey, manualDetailFields, manualOverrides, review, settings])
 
   useEffect(() => {
-    if (!settings.autoQa?.enabled) return
+    if (!settings.autoQa?.enabled) {
+      setAutoQaServiceOnline(null)
+      setAutoQaServiceMessage('Auto QA is disabled in Admin settings.')
+      return
+    }
+
     let cancelled = false
-    void checkAutoQaService(settings).then((result) => {
-      if (!cancelled) setAutoQaServiceOnline(result.ok)
-    })
-    return () => { cancelled = true }
+    const check = async () => {
+      const result = await checkAutoQaService(settings)
+      if (cancelled) return
+      setAutoQaServiceOnline(result.ok)
+      setAutoQaServiceMessage(result.message)
+      setAutoQaLastChecked(result.checkedAt)
+    }
+    void check()
+    const interval = window.setInterval(() => void check(), 20000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
   }, [settings])
+
+  useEffect(() => {
+    if (autoQaProgress.status !== 'running' || !autoQaProgress.startedAt) return
+    const timer = window.setInterval(() => {
+      setAutoQaProgress((current) => {
+        if (current.status !== 'running' || !current.startedAt) return current
+        const elapsedSeconds = Math.max(0, Math.floor((Date.now() - current.startedAt) / 1000))
+        const estimate = estimateProgress(current.mode, elapsedSeconds)
+        return {
+          ...current,
+          elapsedSeconds,
+          percent: Math.min(99, Math.max(current.percent, estimate.percent)),
+          stage: estimate.stage,
+        }
+      })
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [autoQaProgress.startedAt, autoQaProgress.status])
 
   const applyAiCriteria = (
     current: ReviewDraft,
@@ -196,23 +376,52 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
 
       let status = ai.status
       let criticalReason = ai.criticalReason || ''
-      if (status === '✕ Markdown' && current.qaType !== 'Groups' && isMatrixComplianceCriterion(criterion.name)) {
-        status = 'Critical'
-        criticalReason = criticalReason || 'Required Matrix process was not followed'
+      if (status === 'Critical' && !isCriticalCriterion(criterion.name)) {
+        status = '✕ Markdown'
+        criticalReason = ''
       }
-      if (status === 'Critical' && !isCriticalCriterion(criterion.name)) status = '✕ Markdown'
 
       return {
         ...criterion,
         status,
         customNote: ai.note || '',
         criticalReason: status === 'Critical'
-          ? (criticalReason || (criterion.name.toLowerCase().includes('documentation quality') ? 'Other Documentation Critical' : 'Other Matrix Critical'))
+          ? (criticalReason || (criterion.name.toLowerCase().includes('documentation quality') ? 'Other Documentation Critical' : 'Required Matrix process was not followed'))
           : '',
         partialPoints: criterion.points / 2,
         autoPoints: pointsForStatus(criterion.points, status),
       }
     })
+  }
+
+  const handleNewAudioFile = (file: File | null) => {
+    const hasPriorAutoQaSession = Boolean(autoQaTranscript || Object.keys(autoQaEvidence).length || autoQaStage !== 'ready' || draftRestored)
+    setAudioFile(file)
+    setAutoQaTranscript('')
+    setAutoQaEvidence({})
+    setDocumentation('')
+    setManualOverrides(new Set())
+    setAutoQaStage('ready')
+    setValidation({ errors: [], fieldErrors: {} })
+    setDraftRestored(false)
+    setAutoQaProgress({ status: 'idle', mode: 'call', percent: 0, elapsedSeconds: 0, stage: 'Not started', startedAt: null, error: '' })
+
+    setReview((current) => ({
+      ...current,
+      confirmationNumber: hasPriorAutoQaSession || !manualDetailFields.has('confirmationNumber') ? '' : current.confirmationNumber,
+      guestEmail: hasPriorAutoQaSession || !manualDetailFields.has('guestEmail') ? '' : current.guestEmail,
+      guestPhone: hasPriorAutoQaSession || !manualDetailFields.has('guestPhone') ? '' : current.guestPhone,
+      callLength: hasPriorAutoQaSession || !manualDetailFields.has('callLength') ? '' : current.callLength,
+      callDate: hasPriorAutoQaSession || !manualDetailFields.has('callDate') ? '' : current.callDate,
+      criteria: createCriterionAnswers(settings, current.qaType),
+      criticalErrors: { noNotes: false, voucherReference: false },
+    }))
+
+    if (hasPriorAutoQaSession) setManualDetailFields(new Set())
+    setAutoQaMessage(file
+      ? `New call selected: ${file.name}. This call has NOT been QA’d yet. Previous Auto QA transcript, evidence, statuses, Criticals, and AI notes were cleared.`
+      : '')
+    if (file) void refreshAutoQaService(false)
   }
 
   const executeCallAutoQa = async (recheck = false) => {
@@ -229,8 +438,18 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
       return
     }
 
+    setAutoQaMessage('Checking Auto QA service before processing…')
+    const ready = await refreshAutoQaService(false)
+    if (!ready) {
+      const message = autoQaServiceMessage || 'Auto QA service cannot be reached. Check START-EVERYTHING.bat and the Cloudflare tunnel.'
+      setAutoQaMessage(message)
+      failProgress(message)
+      return
+    }
+
     setAutoQaBusy(true)
-    setAutoQaMessage(recheck ? 'Rechecking the call QA from the transcript…' : 'Transcribing the call and running the call QA…')
+    startProgress('call')
+    setAutoQaMessage(recheck ? 'Rechecking the call QA from the existing transcript…' : 'Uploading, transcribing, and reviewing this exact call…')
     try {
       const result = await runAutoQa({
         audioFile: recheck ? undefined : (audioFile || undefined),
@@ -252,22 +471,23 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
       }))
 
       if (!recheck) setManualOverrides(new Set())
-      setAutoQaTranscript(result.transcript || autoQaTranscript)
-      setAutoQaEvidence((current) => ({
-        ...current,
-        ...Object.fromEntries(result.criteria.filter((item) => {
-          const criterion = review.criteria.find((candidate) => Number(candidate.number) === Number(item.number))
-          return criterion ? !isDocumentationCriterion(criterion.name) : true
-        }).map((item) => [Number(item.number), item])),
-      }))
+      setAutoQaTranscript(result.transcript)
+      const callEvidence = Object.fromEntries(result.criteria.filter((item) => {
+        const criterion = review.criteria.find((candidate) => Number(candidate.number) === Number(item.number))
+        return criterion ? !isDocumentationCriterion(criterion.name) : true
+      }).map((item) => [Number(item.number), item]))
+      setAutoQaEvidence((current) => recheck ? { ...current, ...callEvidence } : callEvidence)
       setValidation({ errors: [], fieldErrors: {} })
       setAutoQaServiceOnline(true)
       setAutoQaStage('booking-question')
       setAudioFile(null)
-      setAutoQaMessage(`Call QA complete. Overall confidence ${Math.round(result.overallConfidence || 0)}%. Review or edit anything you want. The uploaded call audio was removed from the server after transcription.`)
+      completeProgress()
+      setAutoQaMessage(`Call QA complete for this run. Overall confidence ${Math.round(result.overallConfidence || 0)}%. Review or edit anything you want. The uploaded call audio was deleted from the Auto QA server after transcription.`)
     } catch (error) {
-      setAutoQaServiceOnline(false)
-      setAutoQaMessage(error instanceof Error ? error.message : 'Auto QA failed.')
+      const message = error instanceof Error ? error.message : 'Auto QA failed.'
+      failProgress(message)
+      setAutoQaMessage(message)
+      void refreshAutoQaService(false)
     } finally {
       setAutoQaBusy(false)
     }
@@ -283,7 +503,17 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
       return
     }
 
+    setAutoQaMessage('Checking Auto QA service before documentation review…')
+    const ready = await refreshAutoQaService(false)
+    if (!ready) {
+      const message = autoQaServiceMessage || 'Auto QA service cannot be reached. Check START-EVERYTHING.bat and the Cloudflare tunnel.'
+      setAutoQaMessage(message)
+      failProgress(message)
+      return
+    }
+
     setAutoQaBusy(true)
+    startProgress('documentation')
     setAutoQaMessage('Reviewing the booking documentation and finishing the documentation QA…')
     try {
       const result = await runAutoQa({
@@ -310,10 +540,13 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
       setValidation({ errors: [], fieldErrors: {} })
       setAutoQaServiceOnline(true)
       setAutoQaStage('complete')
+      completeProgress()
       setAutoQaMessage('Documentation QA complete. Review and edit every field, score, status, and note before saving.')
     } catch (error) {
-      setAutoQaServiceOnline(false)
-      setAutoQaMessage(error instanceof Error ? error.message : 'Documentation QA failed.')
+      const message = error instanceof Error ? error.message : 'Documentation QA failed.'
+      failProgress(message)
+      setAutoQaMessage(message)
+      void refreshAutoQaService(false)
     } finally {
       setAutoQaBusy(false)
     }
@@ -352,6 +585,9 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
   const watchListMatch = useMemo(() => findActiveWatchAgent(review.agentName, watchListAgents, review.callCenter), [review.agentName, review.callCenter, watchListAgents])
 
   const updateField = <K extends keyof ReviewDraft>(field: K, value: ReviewDraft[K]) => {
+    if (AUTO_QA_DETAIL_FIELDS.has(field as AutoQaDetailField)) {
+      setManualDetailFields((current) => new Set(current).add(field as AutoQaDetailField))
+    }
     setReview((current) => ({ ...current, [field]: value }))
     setValidation((current) => {
       const next = { ...current.fieldErrors }
@@ -372,6 +608,7 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
     setAutoQaTranscript('')
     setDocumentation('')
     setAutoQaStage('ready')
+    setAutoQaProgress({ status: 'idle', mode: 'call', percent: 0, elapsedSeconds: 0, stage: 'Not started', startedAt: null, error: '' })
   }
 
   const updateCriterion = (index: number, patch: Partial<CriterionAnswer>) => {
@@ -452,7 +689,9 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
     setAutoQaTranscript('')
     setAutoQaEvidence({})
     setManualOverrides(new Set())
+    setManualDetailFields(new Set())
     setAutoQaStage('ready')
+    setAutoQaProgress({ status: 'idle', mode: 'call', percent: 0, elapsedSeconds: 0, stage: 'Not started', startedAt: null, error: '' })
     window.localStorage.removeItem(draftKey)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -477,7 +716,7 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
   return (
     <div className="page-stack">
       {draftRestored && (
-        <section className="draft-restored-banner">Draft restored automatically. Your unfinished review was recovered from this browser.</section>
+        <section className="draft-restored-banner">Draft details restored automatically. Auto QA scoring is only restored when it was manually edited; old AI-only scoring is not reused for a new call.</section>
       )}
 
       {user.guidedMode && (
@@ -672,9 +911,16 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
                   <h3>Call First → Booking → Documentation</h3>
                   <p className="muted">Upload only the call first. No itinerary or documentation is required to start. The call is transcribed and graded, then the tool tries to find the itinerary, guest email, and guest phone for you.</p>
                 </div>
-                <span className={`service-status ${autoQaServiceOnline === true ? 'online' : autoQaServiceOnline === false ? 'offline' : ''}`}>
-                  {autoQaServiceOnline === true ? 'Local service online' : autoQaServiceOnline === false ? 'Local service offline' : 'Checking local service…'}
-                </span>
+                <div style={{ display: 'grid', gap: 6, justifyItems: 'end' }}>
+                  <span className={`service-status ${autoQaServiceOnline === true ? 'online' : autoQaServiceOnline === false ? 'offline' : ''}`}>
+                    {autoQaServiceOnline === true ? 'Auto QA ready' : autoQaServiceOnline === false ? 'Auto QA offline / not ready' : 'Checking Auto QA…'}
+                  </span>
+                  <button type="button" className="secondary-button compact" onClick={() => void refreshAutoQaService(true)} disabled={autoQaBusy}>
+                    Retry / Recheck Connection
+                  </button>
+                  <small className="muted">{autoQaServiceMessage}</small>
+                  <small className="muted">Last checked: {autoQaLastChecked ? new Date(autoQaLastChecked).toLocaleTimeString() : 'not yet'}</small>
+                </div>
               </div>
 
               {autoQaStage === 'ready' && (
@@ -684,32 +930,39 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
                     <input
                       type="file"
                       accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.flac,.wma,.mp4,.webm"
-                      onChange={(event) => {
-                        setAudioFile(event.target.files?.[0] || null)
-                        setAutoQaTranscript('')
-                        setAutoQaEvidence({})
-                        setDocumentation('')
-                      }}
+                      onChange={(event) => handleNewAudioFile(event.target.files?.[0] || null)}
                       disabled={autoQaBusy}
                     />
-                    <em>{audioFile ? audioFile.name : 'Upload the call only. WAV, MP3, M4A, AAC, OGG, FLAC, WMA, MP4 and other FFmpeg-supported formats.'}</em>
+                    <em>{audioFile ? `${audioFile.name} · NOT QA’d yet` : 'Upload the call only. WAV, MP3, M4A, AAC, OGG, FLAC, WMA, MP4 and other FFmpeg-supported formats.'}</em>
                   </label>
                 </div>
               )}
 
               <div className="autoqa-actions">
                 {autoQaStage === 'ready' && (
-                  <button type="button" className="primary-button" onClick={() => void executeCallAutoQa(false)} disabled={!audioFile || autoQaBusy}>
+                  <button type="button" className="primary-button" onClick={() => void executeCallAutoQa(false)} disabled={!audioFile || autoQaBusy || autoQaServiceOnline !== true}>
                     {autoQaBusy ? 'Reviewing Call…' : 'Run Call Auto QA'}
                   </button>
                 )}
                 {autoQaTranscript && (
-                  <button type="button" className="secondary-button" onClick={() => void executeCallAutoQa(true)} disabled={autoQaBusy}>
+                  <button type="button" className="secondary-button" onClick={() => void executeCallAutoQa(true)} disabled={autoQaBusy || autoQaServiceOnline !== true}>
                     Recheck Call QA
                   </button>
                 )}
                 {autoQaTranscript && <span className="muted">Transcript ready · {autoQaTranscript.split(/\s+/).filter(Boolean).length} words{manualOverrides.size ? ` · ${manualOverrides.size} manual edit${manualOverrides.size === 1 ? '' : 's'} protected` : ''}</span>}
               </div>
+
+              {autoQaProgress.status !== 'idle' && (
+                <div className="validation-banner" role="status" aria-live="polite" style={{ display: 'grid', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: 12, justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <strong>{autoQaProgress.status === 'failed' ? 'FAILED' : autoQaProgress.mode === 'documentation' ? 'Documentation Auto QA' : 'Call Auto QA'}</strong>
+                    <span>{Math.round(autoQaProgress.percent)}% · {formatElapsed(autoQaProgress.elapsedSeconds)}</span>
+                  </div>
+                  <progress max={100} value={autoQaProgress.percent} style={{ width: '100%', height: 16 }} />
+                  <span><strong>Current stage:</strong> {autoQaProgress.stage}</span>
+                  <small>{autoQaProgress.status === 'running' ? 'Progress is estimated while the backend works. It will never show 100% until a valid successful response is returned.' : autoQaProgress.status === 'complete' ? 'Validated backend response received.' : autoQaProgress.error}</small>
+                </div>
+              )}
 
               {autoQaStage === 'booking-question' && (
                 <div className="validation-banner">
@@ -756,7 +1009,7 @@ export function ReviewPage({ user, settings, evaluators, watchListAgents, onSave
                     />
                   </label>
                   <div className="autoqa-actions">
-                    <button type="button" className="primary-button" onClick={() => void executeDocumentationQa()} disabled={!documentation.trim() || autoQaBusy}>
+                    <button type="button" className="primary-button" onClick={() => void executeDocumentationQa()} disabled={!documentation.trim() || autoQaBusy || autoQaServiceOnline !== true}>
                       {autoQaBusy ? 'Reviewing Documentation…' : 'Finish Documentation QA'}
                     </button>
                     <button type="button" className="secondary-button" onClick={() => setAutoQaStage('notes-choice')} disabled={autoQaBusy}>Back</button>

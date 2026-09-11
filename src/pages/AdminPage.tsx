@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { AppSettings, CriterionDefinition, QaType, QaUser, UserRole } from '../types'
 import { ADMIN_EMAILS, OWNER_EMAIL, SUPER_ADMIN_EMAILS, normalizeEmail } from '../lib/firebase'
-import { tryExtractSalesCriteria, workbookToQaText } from '../lib/autoQa'
+import { checkAutoQaService, tryExtractSalesCriteria, workbookToQaText } from '../lib/autoQa'
 const RETIRED_USER_EMAILS = new Set(['barbara.kalchik@hotelplanner.com'])
 
 interface AdminPageProps {
@@ -54,6 +54,7 @@ export function AdminPage({
   const [legacyFile, setLegacyFile] = useState<File | null>(null)
   const [migrationMessage, setMigrationMessage] = useState('')
   const [autoQaMessage, setAutoQaMessage] = useState('')
+  const [autoQaTesting, setAutoQaTesting] = useState(false)
 
   const visibleUsers = useMemo(() => {
     const seen = new Set<string>()
@@ -109,7 +110,6 @@ export function AdminPage({
       },
     }))
   }
-
 
   const addSalesCriterion = () => {
     setDraftSettings((current) => {
@@ -214,6 +214,23 @@ export function AdminPage({
     await onSaveSettings(draftSettings)
   }
 
+  const testAutoQaConnection = async () => {
+    if (autoQaTesting) return
+    setAutoQaTesting(true)
+    setAutoQaMessage('Testing Auto QA backend, Ollama, Python environment, and selected model…')
+    try {
+      const result = await checkAutoQaService(draftSettings)
+      const checks = result.checks
+      const detail = checks
+        ? ` Backend: ${checks.server ? 'OK' : 'FAIL'} · Python: ${checks.python ? 'OK' : 'FAIL'} · Ollama: ${checks.ollama ? 'OK' : 'FAIL'} · Model: ${checks.model ? 'OK' : 'FAIL'}`
+        : ''
+      setAutoQaMessage(`${result.ok ? 'READY' : 'NOT READY'} — ${result.message}${detail}`)
+    } catch (error) {
+      setAutoQaMessage(error instanceof Error ? error.message : 'Auto QA connection test failed.')
+    } finally {
+      setAutoQaTesting(false)
+    }
+  }
 
   const importMatrixFile = async (file: File | null) => {
     if (!file) return
@@ -452,7 +469,12 @@ export function AdminPage({
               <h2>Ollama, Matrix and Group Sales Form</h2>
               <p className="muted">Runs through your local Auto QA companion service. No paid AI API key is required.</p>
             </div>
-            <button type="button" className="primary-button" onClick={saveSettings} disabled={busy}>Save Auto QA Settings</button>
+            <div className="autoqa-actions">
+              <button type="button" className="secondary-button" onClick={() => void testAutoQaConnection()} disabled={busy || autoQaTesting}>
+                {autoQaTesting ? 'Testing Connection…' : 'Test Auto QA Connection'}
+              </button>
+              <button type="button" className="primary-button" onClick={saveSettings} disabled={busy}>Save Auto QA Settings</button>
+            </div>
           </div>
 
           <div className="rule-grid">
@@ -521,7 +543,7 @@ export function AdminPage({
                 checked={draftSettings.rules.confirmationRequired}
                 onChange={(event) => setDraftSettings((current) => ({ ...current, rules: { ...current.rules, confirmationRequired: event.target.checked } }))}
               />
-              <span><strong>Confirmation required</strong><small>Accept any itinerary, confirmation, reservation, or supplier reference.</small></span>
+              <span><strong>Confirmation required</strong><small>Accept any itinerary, confirmation number, reservation number, or supplier reference.</small></span>
             </label>
             <label className="toggle-row">
               <input
