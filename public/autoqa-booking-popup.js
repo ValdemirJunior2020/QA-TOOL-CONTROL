@@ -1,10 +1,69 @@
 (() => {
   const PANEL_ID = 'autoqa-booking-flow-modal'
   const STYLE_ID = 'autoqa-booking-flow-style'
+  const TRANSCRIPT_STORAGE_KEY = 'qa-control:autoqa:last-transcript'
+  const TRANSCRIPT_MODAL_ID = 'autoqa-transcript-viewer'
   let dismissedStage = ''
   let renderedStage = ''
+  let latestTranscript = ''
 
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim()
+
+  try {
+    latestTranscript = sessionStorage.getItem(TRANSCRIPT_STORAGE_KEY) || ''
+  } catch {}
+
+  function findTranscriptInPayload(payload, depth = 0) {
+    if (!payload || depth > 5) return ''
+    if (typeof payload === 'string') return ''
+    if (Array.isArray(payload)) {
+      for (const item of payload) {
+        const found = findTranscriptInPayload(item, depth + 1)
+        if (found) return found
+      }
+      return ''
+    }
+    if (typeof payload !== 'object') return ''
+
+    for (const key of ['transcript', 'fullTranscript', 'full_transcript', 'transcription', 'transcriptText', 'transcript_text']) {
+      const value = payload[key]
+      if (typeof value === 'string' && value.trim().length > 20) return value.trim()
+    }
+
+    for (const value of Object.values(payload)) {
+      const found = findTranscriptInPayload(value, depth + 1)
+      if (found) return found
+    }
+    return ''
+  }
+
+  function rememberTranscript(text) {
+    const value = String(text || '').trim()
+    if (!value) return
+    latestTranscript = value
+    try { sessionStorage.setItem(TRANSCRIPT_STORAGE_KEY, value) } catch {}
+    window.dispatchEvent(new CustomEvent('autoqa-transcript-ready', { detail: { transcript: value } }))
+    window.setTimeout(ensureTranscriptControls, 0)
+  }
+
+  if (!window.__autoQaTranscriptFetchHookInstalled) {
+    window.__autoQaTranscriptFetchHookInstalled = true
+    const originalFetch = window.fetch.bind(window)
+    window.fetch = async (...args) => {
+      const response = await originalFetch(...args)
+      try {
+        const clone = response.clone()
+        const contentType = clone.headers.get('content-type') || ''
+        if (contentType.includes('application/json')) {
+          clone.json().then((payload) => {
+            const transcript = findTranscriptInPayload(payload)
+            if (transcript) rememberTranscript(transcript)
+          }).catch(() => {})
+        }
+      } catch {}
+      return response
+    }
+  }
 
   function ensureStyles() {
     if (document.getElementById(STYLE_ID)) return
@@ -31,9 +90,115 @@
       .autoqa-flow-primary{background:#ffd83d;color:#181338}
       .autoqa-flow-secondary{background:#f1f2f7;color:#252944;border:1px solid #d7d9e4!important}
       .autoqa-flow-waiting{margin-top:12px;padding:10px 12px;border-radius:9px;background:#f7f5ff;color:#4d428b;font-weight:700}
-      @media(max-width:700px){#${PANEL_ID}{right:8px;bottom:8px;width:calc(100vw - 16px);max-height:65vh;padding:16px}}
+      .autoqa-transcript-controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-left:4px}
+      .autoqa-transcript-button{border:1px solid #cfd3e2!important;border-radius:9px!important;background:#fff!important;color:#1d2354!important;padding:9px 12px!important;font-weight:800!important;cursor:pointer!important}
+      #${TRANSCRIPT_MODAL_ID}{position:fixed;inset:0;z-index:11000;background:rgba(10,13,30,.62);display:flex;align-items:center;justify-content:center;padding:24px}
+      #${TRANSCRIPT_MODAL_ID} .autoqa-transcript-card{width:min(900px,96vw);max-height:88vh;display:flex;flex-direction:column;background:#fff;border-radius:16px;box-shadow:0 28px 80px rgba(0,0,0,.35);padding:22px;position:relative;color:#17124f}
+      #${TRANSCRIPT_MODAL_ID} textarea{width:100%;min-height:420px;max-height:60vh;resize:vertical;border:1px solid #cfd3e2;border-radius:10px;padding:14px;font:14px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:#161829;background:#fff;user-select:text!important;-webkit-user-select:text!important}
+      #${TRANSCRIPT_MODAL_ID} .autoqa-transcript-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}
+      #${TRANSCRIPT_MODAL_ID} button{border:1px solid #d7d9e4;border-radius:9px;background:#f1f2f7;color:#252944;font-weight:800;padding:10px 14px;cursor:pointer}
+      #${TRANSCRIPT_MODAL_ID} .primary{background:#ffd83d;color:#181338;border:0}
+      @media(max-width:700px){#${PANEL_ID}{right:8px;bottom:8px;width:calc(100vw - 16px);max-height:65vh;padding:16px}#${TRANSCRIPT_MODAL_ID}{padding:8px}#${TRANSCRIPT_MODAL_ID} textarea{min-height:320px}}
     `
     document.head.appendChild(style)
+  }
+
+  function getTranscript() {
+    if (latestTranscript) return latestTranscript
+    try { return sessionStorage.getItem(TRANSCRIPT_STORAGE_KEY) || '' } catch { return '' }
+  }
+
+  function safeFilePart(value) {
+    return String(value || '').trim().replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'call'
+  }
+
+  function currentCallId() {
+    return fieldInput('Call ID')?.value || fieldInput('Confirmation / Itinerary #')?.value || 'call'
+  }
+
+  function downloadTranscript() {
+    const transcript = getTranscript()
+    if (!transcript) {
+      window.alert('Transcript is not available yet. Recheck the call once, then try again.')
+      return
+    }
+    const blob = new Blob([transcript], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${safeFilePart(currentCallId())}-transcript.txt`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  function copyTranscript(button) {
+    const transcript = getTranscript()
+    if (!transcript) return
+    navigator.clipboard?.writeText(transcript).then(() => {
+      if (!button) return
+      const old = button.textContent
+      button.textContent = 'Copied'
+      setTimeout(() => { if (button.isConnected) button.textContent = old }, 900)
+    }).catch(() => {})
+  }
+
+  function closeTranscriptViewer() {
+    document.getElementById(TRANSCRIPT_MODAL_ID)?.remove()
+  }
+
+  function viewTranscript() {
+    ensureStyles()
+    const transcript = getTranscript()
+    if (!transcript) {
+      window.alert('Transcript is not available yet. Recheck the call once, then try again.')
+      return
+    }
+    closeTranscriptViewer()
+    const modal = document.createElement('div')
+    modal.id = TRANSCRIPT_MODAL_ID
+    modal.innerHTML = `
+      <section class="autoqa-transcript-card" role="dialog" aria-modal="true">
+        <button type="button" class="autoqa-flow-close" data-transcript-close aria-label="Close">×</button>
+        <p class="autoqa-flow-eyebrow">Auto QA Transcript</p>
+        <h2>Call Transcript</h2>
+        <p class="autoqa-flow-copy">Select and copy anything you need, or download the full transcript as a TXT file.</p>
+        <textarea readonly data-transcript-text>${escapeHtml(transcript)}</textarea>
+        <div class="autoqa-transcript-actions">
+          <button type="button" class="primary" data-transcript-download>Download Transcript (.txt)</button>
+          <button type="button" data-transcript-copy>Copy Full Transcript</button>
+          <button type="button" data-transcript-close>Close</button>
+        </div>
+      </section>`
+    document.body.appendChild(modal)
+    modal.querySelectorAll('[data-transcript-close]').forEach((button) => button.addEventListener('click', closeTranscriptViewer))
+    modal.querySelector('[data-transcript-download]')?.addEventListener('click', downloadTranscript)
+    modal.querySelector('[data-transcript-copy]')?.addEventListener('click', (event) => copyTranscript(event.currentTarget))
+    modal.addEventListener('click', (event) => { if (event.target === modal) closeTranscriptViewer() })
+    const area = modal.querySelector('[data-transcript-text]')
+    area?.focus()
+  }
+
+  function ensureTranscriptControls() {
+    ensureStyles()
+    const pagePanel = findPanel()
+    if (!pagePanel) return
+    const transcriptReady = Array.from(pagePanel.querySelectorAll('span')).some((span) => normalize(span.textContent).includes('Transcript ready'))
+    if (!transcriptReady && !getTranscript()) return
+
+    const actions = pagePanel.querySelector('.autoqa-actions')
+    if (!actions || actions.querySelector('[data-autoqa-transcript-controls]')) return
+
+    const wrap = document.createElement('div')
+    wrap.className = 'autoqa-transcript-controls'
+    wrap.dataset.autoqaTranscriptControls = 'true'
+    wrap.innerHTML = `
+      <button type="button" class="autoqa-transcript-button" data-view-transcript>View Transcript</button>
+      <button type="button" class="autoqa-transcript-button" data-download-transcript>Download Transcript</button>`
+    actions.appendChild(wrap)
+    wrap.querySelector('[data-view-transcript]')?.addEventListener('click', viewTranscript)
+    wrap.querySelector('[data-download-transcript]')?.addEventListener('click', downloadTranscript)
   }
 
   function findField(labelText) {
@@ -160,6 +325,8 @@
       <div class="autoqa-flow-actions">
         <button class="autoqa-flow-primary" data-action="hp-yes">Yes — HP Booking</button>
         <button class="autoqa-flow-secondary" data-action="hp-no">No — Not HP</button>
+        <button class="autoqa-flow-secondary" data-action="view-transcript">View Transcript</button>
+        <button class="autoqa-flow-secondary" data-action="download-transcript">Download Transcript</button>
         <button class="autoqa-flow-secondary" data-action="close">Close / Keep Working</button>
       </div>`
     addClose(panel)
@@ -170,6 +337,8 @@
     panel.querySelector('[data-field="phone"]')?.addEventListener('input', (e) => setNativeValue(phone, e.target.value))
     panel.querySelector('[data-action="hp-yes"]')?.addEventListener('click', () => { dismissedStage = ''; buttonIn(banner, 'Yes — HP Booking')?.click(); removePanel(false) })
     panel.querySelector('[data-action="hp-no"]')?.addEventListener('click', () => { dismissedStage = ''; buttonIn(banner, 'No — Not HP')?.click(); removePanel(false) })
+    panel.querySelector('[data-action="view-transcript"]')?.addEventListener('click', viewTranscript)
+    panel.querySelector('[data-action="download-transcript"]')?.addEventListener('click', downloadTranscript)
     panel.querySelector('[data-action="close"]')?.addEventListener('click', () => removePanel(true))
     return true
   }
@@ -199,6 +368,8 @@
         <button class="autoqa-flow-primary" data-action="paste">Yes — Paste Documentation</button>
         <button class="autoqa-flow-secondary" data-action="manual">I Will QA Documentation Manually</button>
         <button class="autoqa-flow-secondary" data-action="without">QA What We Have Without Notes</button>
+        <button class="autoqa-flow-secondary" data-action="view-transcript">View Transcript</button>
+        <button class="autoqa-flow-secondary" data-action="download-transcript">Download Transcript</button>
         <button class="autoqa-flow-secondary" data-action="close">Close / Keep Working</button>
       </div>`
     addClose(panel)
@@ -208,6 +379,8 @@
     panel.querySelector('[data-action="paste"]')?.addEventListener('click', () => { dismissedStage = ''; buttonIn(banner, 'Paste Documentation')?.click(); removePanel(false) })
     panel.querySelector('[data-action="manual"]')?.addEventListener('click', () => { dismissedStage = ''; buttonIn(banner, 'I Will QA Documentation Manually')?.click(); removePanel(false) })
     panel.querySelector('[data-action="without"]')?.addEventListener('click', () => { dismissedStage = ''; buttonIn(banner, 'QA What We Have Without Notes')?.click(); removePanel(false) })
+    panel.querySelector('[data-action="view-transcript"]')?.addEventListener('click', viewTranscript)
+    panel.querySelector('[data-action="download-transcript"]')?.addEventListener('click', downloadTranscript)
     panel.querySelector('[data-action="close"]')?.addEventListener('click', () => removePanel(true))
     return true
   }
@@ -230,6 +403,8 @@
       <div class="autoqa-flow-actions">
         <button class="autoqa-flow-primary" data-action="finish" ${textarea.value.trim() ? '' : 'disabled'}>Finish Documentation QA</button>
         <button class="autoqa-flow-secondary" data-action="back">Back</button>
+        <button class="autoqa-flow-secondary" data-action="view-transcript">View Transcript</button>
+        <button class="autoqa-flow-secondary" data-action="download-transcript">Download Transcript</button>
         <button class="autoqa-flow-secondary" data-action="close">Close / Keep Working</button>
       </div>
       <div class="autoqa-flow-waiting">AI is waiting for your documentation.</div>`
@@ -240,6 +415,8 @@
     modalTextarea?.addEventListener('input', (e) => { setNativeValue(textarea, e.target.value); finishButton.disabled = !e.target.value.trim() })
     finishButton?.addEventListener('click', () => { if (!modalTextarea.value.trim()) return; setNativeValue(textarea, modalTextarea.value); finish.click(); finishButton.disabled = true; finishButton.textContent = 'Reviewing Documentation…' })
     panel.querySelector('[data-action="back"]')?.addEventListener('click', () => { dismissedStage = ''; back?.click(); removePanel(false) })
+    panel.querySelector('[data-action="view-transcript"]')?.addEventListener('click', viewTranscript)
+    panel.querySelector('[data-action="download-transcript"]')?.addEventListener('click', downloadTranscript)
     panel.querySelector('[data-action="close"]')?.addEventListener('click', () => removePanel(true))
     return true
   }
@@ -253,6 +430,7 @@
   }
 
   function syncFlow() {
+    ensureTranscriptControls()
     const stage = currentStage()
     if (dismissedStage && stage !== dismissedStage) dismissedStage = ''
     if (renderBooking()) return
@@ -262,9 +440,12 @@
   }
 
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && document.getElementById(PANEL_ID)) removePanel(true)
+    if (event.key !== 'Escape') return
+    if (document.getElementById(TRANSCRIPT_MODAL_ID)) closeTranscriptViewer()
+    else if (document.getElementById(PANEL_ID)) removePanel(true)
   })
 
+  window.addEventListener('autoqa-transcript-ready', ensureTranscriptControls)
   const observer = new MutationObserver(() => window.requestAnimationFrame(syncFlow))
   observer.observe(document.documentElement, { childList: true, subtree: true })
   window.addEventListener('load', syncFlow)
