@@ -55,8 +55,8 @@ function Get-Listener([int]$Port) {
     Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -First 1
 }
 
-function Get-ProcessInfo([int]$Pid) {
-    Get-CimInstance Win32_Process -Filter "ProcessId = $Pid" -ErrorAction SilentlyContinue
+function Get-ProcessInfo([int]$ProcessId) {
+    Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
 }
 
 function Stop-OldLauncherWatchdogs {
