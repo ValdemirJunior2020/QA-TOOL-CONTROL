@@ -1,0 +1,62 @@
+HOTELPLANNER SUPPLEMENTAL QA PROCESS UPDATES
+Source: ISSUES VIA EMAIL SENT (6).docx
+
+PRIORITY / USE RULE
+Use these updates only when the active Service Matrix does not clearly answer the situation. If the Service Matrix clearly covers the issue, follow the Matrix first. If a dated update explicitly says "moving forward," "effective immediately," "update," or otherwise establishes a newer process, treat that newer instruction as controlling for that process.
+
+EVALUATOR WORDING RULE
+Never mention AI, a model, automation, retrieval, RAG, a transcript, this file, or internal source mechanics in reviewer-facing notes. Write findings as direct QA-manager observations, for example: "I could not hear...", "The call does not show...", "The agent did not...", or "An email update dated MM/DD/YY states...".
+
+06/04/2026 — NON-REFUNDABLE REFUND HANDLING
+For a non-refundable reservation after check-in, do not request a full refund before confirming with the hotel whether the reservation was cancelled free of charge or whether penalties apply. When there is no hotel confirmation supporting a full refund, the customer should typically receive a voucher or a partial refund rather than an unsupported full refund.
+
+06/04/2026 — PAY-AT-HOTEL BOOKINGS
+Pay-at-hotel does not mean HotelPlanner cannot assist. Agents should contact the hotel directly and negotiate a refund or compensation on the customer's behalf when the booking was made through HotelPlanner.
+
+06/04/2026 — DATE CHANGE / REBOOK
+When changing dates by creating a new booking or voucher/rebooking flow, the original reservation must also be cancelled. Leaving the original active can create a no-show charge and is incorrect handling.
+
+06/05/2026 — REFUND CLAIM SIGNATURE
+At the final step of a refund claim, the signature must be the person submitting the request. When the customer service representative is submitting the claim, the representative should sign it.
+
+06/02/2026 — REFUND PROTECTION CLAIM PROCESS UPDATE
+Moving forward, for callers who need to open a refund request, the agent should initiate the claim on behalf of the customer to expedite and assist with the process. Only allowed claim circumstances should be used.
+
+06/05/2026 — OUTBOUND PHONE UPDATE
+Moving forward, discontinue the Zendesk phone system for outbound calls and use the HotelPlanner platform for outbound calls. Numbers that do not work or connect should be reported for testing.
+
+06/12/2026 — CANCELLATION AFTER REFUND OR VOUCHER
+After processing a refund or voucher for a non-refundable booking, call the hotel to request a courtesy cancellation and also attempt to cancel the booking from the confirmation page. For partially refundable or free-cancellation reservations, cancel the booking from the confirmation page. A reservation that could have been cancelled but was not may create a charge to the team.
+
+06/12/2026 — DUPLICATE TICKETS
+At the beginning of each day, review possible duplicate tickets first. Merge true duplicates before beginning assigned tickets.
+
+06/2026 — REFUND REQUEST NUMBER
+After submitting a claim for a guest, record the refund request number in the notes section.
+
+06/24/2026 — SALES CALL REVIEW / WAIVER FIRST
+Before requesting a sales call review, contact the hotel and request a waiver first. A sales call review should only be required after the hotel has denied the waiver. Submitting a call review without hotel outreach creates unnecessary delay and may be returned for additional action.
+
+06/26/2026 — TICKET SEARCH / MERGE / RECOVERY
+Search for tickets by customer name first, then by itinerary. Review each ticket to determine whether there are separate concerns, but resolve related issues within one ticket whenever possible. If the original request is from the recovery team, reassign it to the recovery team.
+
+06/26/2026 — CUSTOMER ADDRESSING / PUBLIC RESPONSE FORMAT
+Do not address customers as Mr., Ms., or Miss. Address the customer by name only. Before sending a public response, review the full message and signature to ensure font size and color are consistent throughout.
+
+07/02/2026 — REFUND / VOUCHER / DOCUMENTATION / CANCELLATION EXAMPLES
+When appropriate, offer the customer the option to rebook for one night and process the correct refund amount. A voucher may be an appropriate settlement option. Before sending a reservation to VIP Support for claimed charges, request supporting documentation such as a screenshot. When a reservation is cancelled, vouchered, or rebooked, contact the hotel to confirm free-of-charge cancellation when required. Attempt cancellation from the booking and request courtesy cancellation when applicable.
+
+07/02/2026 — SECOND HOTEL CONTACT / SECOND VOICE
+When the customer's documentation supports a valid refund concern, do not simply enter N/A after one unsuccessful or insufficient hotel contact. A second call should be made to obtain a second voice and attempt to negotiate the refund when appropriate.
+
+07/09/2026 — MODIFICATION / REBOOK / REMAINING BALANCE / HOTEL VERIFICATION
+For a reservation modification, follow the correct cancel-and-rebook procedure. After rebooking, process any remaining refund balance that is due. Before escalating a hotel amenity issue to VIP Support, check the hotel's website or contact the hotel directly to verify the policy or amenity when that can resolve the issue.
+
+07/17/2026 — CONTACT HOTEL BEFORE CALL REVIEW ESCALATION
+Before submitting an escalation for a call review, contact the hotel to determine whether a refund can be obtained for the customer. Repeatedly reviewing or following up on a ticket without making this hotel contact is not acceptable handling.
+
+07/22/2026 — CREATE A TICKET WHEN FOLLOW-UP IS NEEDED
+When an agent cannot reach the hotel and follow-up is still needed, create a ticket for the service team. Follow-up work must be tracked so the customer receives an update or resolution and unnecessary callbacks are avoided.
+
+09/08/2026 — SUPPLIER WAIVER PHONE CONTACT / TICKET / SIDE CONVERSATION
+Effective immediately, agents should contact suppliers by phone to obtain a waiver when applicable. If the supplier cannot be reached by phone, open a ticket. The ticket agent should email the supplier using side conversations. Voice agents should perform the supplier contact while the customer is on the line, tell the customer they will be placed on a silent hold, and advise that it can take up to 10 minutes. If more time is needed, return to the line and update the customer.
