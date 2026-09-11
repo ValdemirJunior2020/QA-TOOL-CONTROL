@@ -2,6 +2,7 @@
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
+if /I "%~1"=="OLLAMA-WATCH" goto OLLAMA_WATCH
 if /I "%~1"=="GATEWAY-WATCH" goto GATEWAY_WATCH
 if /I "%~1"=="TUNNEL-WATCH" goto TUNNEL_WATCH
 
@@ -22,8 +23,14 @@ where node >nul 2>&1 || (
   pause
   exit /b 1
 )
-where ollama >nul 2>&1 || (
-  echo [ERROR] Ollama is not available in PATH.
+
+set "OLLAMA_EXE="
+for /f "delims=" %%I in ('where ollama 2^>nul') do if not defined OLLAMA_EXE set "OLLAMA_EXE=%%I"
+if not defined OLLAMA_EXE if exist "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" set "OLLAMA_EXE=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
+if not defined OLLAMA_EXE if exist "%LOCALAPPDATA%\Ollama\ollama.exe" set "OLLAMA_EXE=%LOCALAPPDATA%\Ollama\ollama.exe"
+if not defined OLLAMA_EXE (
+  echo [ERROR] Ollama was not found.
+  echo Install Ollama and run this BAT again.
   pause
   exit /b 1
 )
@@ -42,13 +49,14 @@ if not exist logs mkdir logs
 set "AUTO_QA_PYTHON=%CD%\.venv-autoqa\Scripts\python.exe"
 set "AUTO_QA_OLLAMA_URL=http://127.0.0.1:11434"
 set "AUTO_QA_OLLAMA_MODEL=qwen3:8b"
+set "OLLAMA_LOG=%CD%\logs\ollama.log"
 set "GATEWAY_LOG=%CD%\logs\autoqa-gateway.log"
 set "CF_LOG=%TEMP%\qa-control-cloudflare.log"
 set "PUBLIC_URL="
 set "TUNNEL_MODE=QUICK"
 
 echo [CLEAN] Stopping stale Auto QA watchdogs and tunnel watchers...
-powershell -NoProfile -Command "$items=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue ^| Where-Object { $_.Name -eq 'cmd.exe' -and $_.CommandLine -match 'START-EVERYTHING(?:-ASYNC)?\.bat.*(AUTOQA-WATCH^|GATEWAY-WATCH^|TUNNEL-WATCH)' }; foreach($x in $items){ try { Stop-Process -Id $x.ProcessId -Force -ErrorAction Stop } catch {} }" >nul 2>&1
+powershell -NoProfile -Command "$items=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue ^| Where-Object { $_.Name -eq 'cmd.exe' -and $_.CommandLine -match 'START-EVERYTHING(?:-ASYNC)?\.bat.*(OLLAMA-WATCH^|AUTOQA-WATCH^|GATEWAY-WATCH^|TUNNEL-WATCH)' }; foreach($x in $items){ try { Stop-Process -Id $x.ProcessId -Force -ErrorAction Stop } catch {} }" >nul 2>&1
 powershell -NoProfile -Command "$items=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue ^| Where-Object { $_.Name -eq 'cloudflared.exe' -and $_.CommandLine -match '--url\s+http://127\.0\.0\.1:8788' }; foreach($x in $items){ try { Stop-Process -Id $x.ProcessId -Force -ErrorAction Stop } catch {} }" >nul 2>&1
 
 echo [CLEAN] Freeing Auto QA ports 8788 and 8789...
@@ -63,19 +71,26 @@ if errorlevel 1 (
 echo [CHECK] Ollama...
 call :CHECK_OLLAMA
 if errorlevel 1 (
-  echo [START] Ollama...
-  start "Ollama" /min cmd /c "ollama serve"
+  echo [START] Ollama watchdog...
+  del /q "%OLLAMA_LOG%" >nul 2>&1
+  start "OLLAMA WATCHDOG" /min cmd /c call "%~f0" OLLAMA-WATCH
   call :WAIT_OLLAMA
   if errorlevel 1 (
-    echo [ERROR] Ollama did not become ready after 60 seconds.
+    echo.
+    echo [ERROR] Ollama did not become ready.
+    echo ----- Ollama log -----
+    powershell -NoProfile -Command "if(Test-Path $env:OLLAMA_LOG){Get-Content $env:OLLAMA_LOG -Tail 120}else{Write-Host 'No Ollama log was created.'}"
+    echo ----- Port 11434 owner -----
+    powershell -NoProfile -Command "$x=Get-NetTCPConnection -LocalPort 11434 -State Listen -ErrorAction SilentlyContinue ^| Select-Object -First 1; if($x){$p=Get-Process -Id $x.OwningProcess -ErrorAction SilentlyContinue; Write-Host ('PID '+$x.OwningProcess+' '+$p.ProcessName)}else{Write-Host 'Nothing is listening on port 11434.'}"
     pause
     exit /b 1
   )
+  echo [OK] Ollama started successfully.
 ) else (
   echo [OK] Ollama is already running.
 )
 
-ollama list | findstr /i /c:"qwen3:8b" >nul 2>&1
+"%OLLAMA_EXE%" list | findstr /i /c:"qwen3:8b" >nul 2>&1
 if errorlevel 1 (
   echo [ERROR] Ollama model qwen3:8b is not installed.
   echo Run: ollama pull qwen3:8b
@@ -184,7 +199,7 @@ powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:1
 exit /b %errorlevel%
 
 :WAIT_OLLAMA
-for /L %%N in (1,1,20) do (
+for /L %%N in (1,1,30) do (
   call :CHECK_OLLAMA
   if not errorlevel 1 exit /b 0
   timeout /t 3 /nobreak >nul
@@ -219,6 +234,23 @@ for /L %%N in (1,1,20) do (
   timeout /t 2 /nobreak >nul
 )
 exit /b 1
+
+:OLLAMA_WATCH
+cd /d "%~dp0"
+if not exist logs mkdir logs
+set "OLLAMA_LOG=%CD%\logs\ollama.log"
+if not defined OLLAMA_EXE for /f "delims=" %%I in ('where ollama 2^>nul') do if not defined OLLAMA_EXE set "OLLAMA_EXE=%%I"
+:OLLAMA_LOOP
+call :CHECK_OLLAMA
+if not errorlevel 1 (
+  timeout /t 5 /nobreak >nul
+  goto OLLAMA_LOOP
+)
+echo [%date% %time%] Starting Ollama server...>>"%OLLAMA_LOG%"
+"%OLLAMA_EXE%" serve >>"%OLLAMA_LOG%" 2>&1
+echo [%date% %time%] Ollama server stopped. Restarting in 3 seconds...>>"%OLLAMA_LOG%"
+timeout /t 3 /nobreak >nul
+goto OLLAMA_LOOP
 
 :GATEWAY_WATCH
 cd /d "%~dp0"
