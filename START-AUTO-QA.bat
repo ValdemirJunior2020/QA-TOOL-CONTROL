@@ -25,6 +25,8 @@ where ollama >nul 2>&1 || (
   exit /b 1
 )
 
+if exist "%~dp0START-AI-MEMORY.bat" call "%~dp0START-AI-MEMORY.bat"
+
 powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 3 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
 if errorlevel 1 (
   echo [START] Ollama...
