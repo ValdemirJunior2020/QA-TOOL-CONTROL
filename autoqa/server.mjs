@@ -206,6 +206,24 @@ const matrixAuditSchema = {
   required: ['applicable','agentFollowed','confidence','matrixRequirement','matrixEvidence','transcriptEvidence','reason'],
 }
 
+const humanRewriteSchema = {
+  type: 'object',
+  properties: {
+    notes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          number: { type: 'number' },
+          note: { type: 'string' },
+        },
+        required: ['number', 'note'],
+      },
+    },
+  },
+  required: ['notes'],
+}
+
 function normalizeLocalOllamaUrl(value) {
   try {
     const parsed = new URL(String(value || DEFAULT_OLLAMA_URL))
@@ -232,9 +250,11 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 8000) {
   }
 }
 
-async function callOllamaJson(input, messages, schema) {
+async function callOllamaJson(input, messages, schema, generationOptions = {}) {
   const base = normalizeLocalOllamaUrl(input.ollamaUrl) || DEFAULT_OLLAMA_URL
   const model = String(input.ollamaModel || DEFAULT_OLLAMA_MODEL).trim() || DEFAULT_OLLAMA_MODEL
+  const requestedTemperature = Number(generationOptions.temperature)
+  const temperature = Number.isFinite(requestedTemperature) ? requestedTemperature : 0.05
   let response
   let payload
   try {
@@ -245,7 +265,7 @@ async function callOllamaJson(input, messages, schema) {
         model,
         stream: false,
         format: schema,
-        options: { temperature: 0.05, num_ctx: 32768 },
+        options: { temperature, num_ctx: 32768 },
         messages,
       }),
     }, 20 * 60 * 1000)
@@ -291,6 +311,49 @@ async function auditMatrixCompliance(input, transcript) {
     { role: 'system', content: 'You are an independent HotelPlanner Service Matrix compliance auditor. Be conservative. Never invent policy or evidence.' },
     { role: 'user', content: prompt },
   ], matrixAuditSchema)
+}
+
+async function rewriteHumanNotes(input, verifiedResult) {
+  const definitions = new Map((input.criteria || []).map((criterion) => [Number(criterion.number), criterion]))
+  const notesToRewrite = (verifiedResult.criteria || []).map((item) => {
+    const definition = definitions.get(Number(item.number)) || {}
+    return {
+      number: Number(item.number),
+      criterion: String(definition.name || ''),
+      status: String(item.status || ''),
+      originalNote: String(item.note || ''),
+      criticalReason: String(item.criticalReason || ''),
+      transcriptEvidence: String(item.transcriptEvidence || '').slice(0, 1200),
+      documentationEvidence: String(item.documentationEvidence || '').slice(0, 1200),
+      matrixEvidence: String(item.matrixEvidence || '').slice(0, 1200),
+    }
+  })
+
+  const prompt = `Rewrite only the reviewer-facing coaching notes below so they sound like a real, busy QA manager wrote them. The QA scoring has already been verified and is LOCKED.\n\nNON-NEGOTIABLE RULES:\n- Do not change, question, reinterpret, or imply a different status, score, Critical decision, Matrix decision, confidence, or evidence.\n- Do not add facts that are not already present.\n- Do not soften a confirmed miss or make a passing item sound like a failure.\n- Keep Matrix and Critical findings faithful to the verified requirement.\n- Rewrite the wording only.\n- Return exactly one note for every criterion number supplied.\n\nHUMAN WRITING STYLE:\n- Sound like an experienced QA manager, not a compliance report or AI assistant.\n- Use simple, direct workplace language.\n- Vary sentence openings and sentence length across the notes.\n- Do not start most notes with "The agent". Use natural alternatives such as "Good verification here.", "I could not hear...", "The call does not show...", "This was handled well.", or a direct description of the issue when appropriate. Do not mechanically reuse these examples either.\n- Positive/Followed notes should usually be brief and natural. Avoid over-praising routine work.\n- Markdown/Partial/Critical notes should clearly say what was missed and, when supported by the supplied evidence, what should have happened instead.\n- Avoid repetitive corporate words such as "properly", "correctly", "demonstrated", "in accordance with", and "applicable" unless they are truly needed.\n- Avoid perfectly balanced three-part sentences when a shorter note works.\n- Do not mention AI, Ollama, automation, a model, retrieval, RAG, prompts, or internal system mechanics.\n\nVERIFIED QA ITEMS:\n${JSON.stringify(notesToRewrite, null, 2)}`
+
+  try {
+    const rewritten = await callOllamaJson(input, [
+      { role: 'system', content: 'You are a HotelPlanner QA manager rewriting already-verified coaching notes into natural human workplace language. You may change wording only. Never change the underlying QA conclusion.' },
+      { role: 'user', content: prompt },
+    ], humanRewriteSchema, { temperature: 0.65 })
+
+    if (!rewritten || !Array.isArray(rewritten.notes)) return verifiedResult
+    const byNumber = new Map(
+      rewritten.notes
+        .map((item) => [Number(item?.number), String(item?.note || '').trim()])
+        .filter(([number, note]) => Number.isFinite(number) && note),
+    )
+
+    for (const item of verifiedResult.criteria || []) {
+      const humanNote = byNumber.get(Number(item.number))
+      if (humanNote) item.note = humanNote.slice(0, 2000)
+    }
+  } catch (error) {
+    // Human wording is optional. Never fail or alter a verified QA because the rewrite pass failed.
+    console.warn(`[human-rewrite] using verified original notes: ${conciseError(error)}`)
+  }
+
+  return verifiedResult
 }
 
 function validatePrimaryShape(input, result) {
@@ -377,7 +440,8 @@ function finalVerification(input, primary, matrixAudit) {
 async function runQaPipeline(input, transcript) {
   const primary = await callPrimaryQa(input, transcript)
   const matrixAudit = await auditMatrixCompliance(input, transcript)
-  return finalVerification(input, primary, matrixAudit)
+  const verified = finalVerification(input, primary, matrixAudit)
+  return rewriteHumanNotes(input, verified)
 }
 
 async function getHealth(ollamaUrl, ollamaModel) {
