@@ -63,7 +63,7 @@ export function ReviewsPage({
   const [evaluator, setEvaluator] =
     useState('ALL')
   const [emailStatus, setEmailStatus] =
-    useState('ALL')
+    useState('NOT_SENT')
   const [dateFrom, setDateFrom] =
     useState('')
   const [dateTo, setDateTo] =
@@ -234,26 +234,24 @@ export function ReviewsPage({
           : 'Preparing team report',
       )
 
-      // Downloads are intentionally limited to reviews that have not been
-      // marked as Email/Sent yet. The table filters above remain unchanged.
+      // The Excel download follows the filters selected on this page,
+      // including date range, Call Center, and Sent / Not Sent status.
       const filters: ReviewExcelFilters = {
         search,
         result,
         center,
         qaType,
         evaluator,
-        emailStatus: 'NOT_SENT',
+        emailStatus,
         dateFrom,
         dateTo,
       }
 
-      const downloadedReviews = filtered.filter(
-        (review) => !Boolean(review.emailSent),
-      )
+      const downloadedReviews = filtered
 
       if (!downloadedReviews.length) {
         setDownloading(false)
-        setDownloadMessage('No reviews are waiting to be emailed. All matching reviews are already marked Sent.')
+        setDownloadMessage('No reviews match the selected download filters.')
         return
       }
 
@@ -282,19 +280,22 @@ export function ReviewsPage({
         const filename =
           format === 'sheet'
             ? await exportReviewsGoogleSheetStyle(
-                reviews,
+                downloadedReviews,
                 filters,
                 onProgress,
               )
             : await exportReviewsToExcel(
-                reviews,
+                downloadedReviews,
                 filters,
                 onProgress,
               )
 
         let markedSentCount = 0
 
-        if (user.role === 'admin') {
+        if (
+          user.role === 'admin' &&
+          emailStatus === 'NOT_SENT'
+        ) {
           const reviewsToMarkSent =
             downloadedReviews.filter(
               (review) =>
@@ -427,7 +428,7 @@ export function ReviewsPage({
             >
               {downloading
                 ? 'Creating Excel…'
-                : 'Download Team Report — Unsent Email (.xlsx)'}
+                : 'Download Team Report (.xlsx)'}
             </button>
 
             <button
@@ -436,7 +437,7 @@ export function ReviewsPage({
               onClick={() => void downloadFilteredWorkbook('sheet')}
               disabled={filtered.length === 0 || downloading}
             >
-              {downloading ? 'Creating Excel…' : 'Download Unsent — Full Google-Sheet Style'}
+              {downloading ? 'Creating Excel…' : 'Download Google-Sheet Style (.xlsx)'}
             </button>
 
             <button
